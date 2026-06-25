@@ -1,0 +1,13 @@
+# Secrets
+.env
+
+# LLM cache (auto-generated)
+cache/
+
+# Run logs (auto-generated)
+logs/
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo

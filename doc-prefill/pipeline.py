@@ -1,0 +1,350 @@
+"""
+Async fan-out pipeline for the Stage-9 document-upload prefill feature.
+
+Handles the real workload: up to 10 files, ~30-35 pages each.
+
+Stages
+------
+1. EXTRACT  (CPU-bound) -> ProcessPoolExecutor across files, in parallel.
+2. SEGMENT  (cheap)     -> split each doc into per-project sections (segment.py).
+3. PREFILL  (I/O-bound) -> one LLM call PER SECTION, run with bounded async
+                           concurrency (asyncio.Semaphore) + retry/backoff.
+                           Oversized sections are chunked and map-reduced.
+4. AGGREGATE            -> flatten to projects with provenance (file + pages),
+                           dedup-cached at the section level.
+
+Why this shape
+--------------
+- Per-section (not per-batch, not per-file) calls keep each LLM input small:
+  better accuracy (no "lost in the middle") and lower cost.
+- Extraction is CPU work -> processes. LLM calls are network waits -> asyncio.
+  Mixing the right concurrency model for each stage is the whole point.
+- A semaphore caps concurrent OpenAI calls so we stay under rate limits while
+  still running ~N calls at once instead of serially.
+
+Run offline (mock) or with OPENAI_API_KEY set (real AsyncOpenAI). See __main__.
+"""
+from __future__ import annotations
+import os, re, json, time, asyncio, hashlib
+from concurrent.futures import ProcessPoolExecutor
+from dataclasses import dataclass, asdict
+from typing import List, Callable, Optional
+
+from extract import extract
+from segment import segment_batch, Section
+from prefill import (PROJECT_JSON_SCHEMA, SYSTEM_PROMPT, MODEL,
+                     PROMPT_VERSION, SCHEMA_VERSION, _sha256_text,
+                     _cache_get, _cache_put, _mock_llm)
+
+MAX_CONCURRENCY = int(os.environ.get("PREFILL_CONCURRENCY", "5"))
+MAX_RETRIES = int(os.environ.get("PREFILL_MAX_RETRIES", "4"))
+
+
+# ----------------------------------------------------------------------
+# Stage 1: extraction (runs inside a separate process; must be top-level)
+# ----------------------------------------------------------------------
+def _extract_worker(path: str) -> tuple:
+    r = extract(path)
+    name = os.path.basename(path)
+    return (name, r.text, {"pages": r.page_count, "chars": r.char_count,
+                           "needs_ocr": r.needs_ocr, "method": r.method})
+
+
+# ----------------------------------------------------------------------
+# Stage 3: one LLM call (async), cached, with retry/backoff
+# ----------------------------------------------------------------------
+@dataclass
+class Telemetry:
+    llm_calls: int = 0
+    cache_hits: int = 0
+    retries: int = 0
+    sections: int = 0
+    chunks: int = 0
+
+
+async def _llm_call(text: str, tel: Telemetry, lg=None, tag: str = "") -> dict:
+    """Cache-checked, retrying LLM call returning {'projects': [...]}.
+    Uses AsyncOpenAI when OPENAI_API_KEY is set, else the offline mock."""
+    key = "llm_" + _sha256_text(text, MODEL, PROMPT_VERSION, SCHEMA_VERSION,
+                                json.dumps(PROJECT_JSON_SCHEMA, sort_keys=True))
+    if lg:
+        lg.save_text(f"03_llm/{tag}_input.txt", text)
+    cached = _cache_get(key)
+    if cached is not None:
+        tel.cache_hits += 1
+        if lg:
+            lg.log(f"    LLM {tag}: CACHE HIT ({len(text)} chars) -> "
+                   f"{len(cached.get('projects', []))} project(s)")
+            lg.save_json(f"03_llm/{tag}_output.json", {**cached, "_cache_hit": True})
+        return cached
+
+    mode = "mock" if not os.environ.get("OPENAI_API_KEY") else MODEL
+    if lg:
+        lg.log(f"    LLM {tag}: calling [{mode}] with {len(text)} chars (~{len(text)//4} tokens)…")
+    if not os.environ.get("OPENAI_API_KEY"):
+        result = _mock_llm(text)                    # offline path
+        await asyncio.sleep(float(os.environ.get("PREFILL_MOCK_LATENCY", "0.05")))
+    else:
+        result = await _openai_with_retry(text, tel)
+
+    _cache_put(key, result)
+    tel.llm_calls += 1
+    if lg:
+        lg.log(f"    LLM {tag}: done -> {len(result.get('projects', []))} project(s)")
+        lg.save_json(f"03_llm/{tag}_output.json", result)
+    return result
+
+
+async def _openai_with_retry(text: str, tel: Telemetry) -> dict:
+    from openai import AsyncOpenAI
+    client = AsyncOpenAI()
+    delay = 1.0
+    for attempt in range(MAX_RETRIES):
+        try:
+            resp = await client.responses.create(
+                model=MODEL,
+                input=[{"role": "system", "content": SYSTEM_PROMPT},
+                       {"role": "user", "content": text}],
+                text={"format": {"type": "json_schema", "name": "stage9_projects",
+                                 "schema": PROJECT_JSON_SCHEMA, "strict": True}},
+            )
+            return json.loads(resp.output_text)
+        except Exception as e:                       # rate limit / transient
+            if attempt == MAX_RETRIES - 1:
+                raise
+            tel.retries += 1
+            await asyncio.sleep(delay)
+            delay *= 2                                # exponential backoff
+    return {"projects": []}
+
+
+# ----------------------------------------------------------------------
+# Map-reduce for an oversized single-project section
+# ----------------------------------------------------------------------
+def _reduce_partials(partials: List[dict]) -> dict:
+    """Merge per-chunk extractions of the SAME project into one record:
+    longest non-empty string wins; max for numeric/confidence fields."""
+    projects = [p for part in partials for p in part.get("projects", [])]
+    if not projects:
+        return {}
+    merged = dict(projects[0])
+    for p in projects[1:]:
+        for k, v in p.items():
+            cur = merged.get(k)
+            if isinstance(v, str):
+                if len(v.strip()) > len(str(cur or "").strip()):
+                    merged[k] = v
+            elif isinstance(v, (int, float)) and v is not None:
+                merged[k] = max(cur or 0, v)
+            elif cur in (None, ""):
+                merged[k] = v
+    return merged
+
+
+# Fields whose absence makes a project worth a human review flag.
+KEY_FIELDS = ["description", "technical_challenges_uncertainties",
+              "solutions_alternatives_considered"]
+REVIEW_CONF = float(os.environ.get("PREFILL_REVIEW_CONF", "0.7"))
+
+
+def _title_key(t: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (t or "").lower()).strip()
+
+
+def merge_projects_by_title(projects: List[dict], threshold: float = 0.82) -> List[dict]:
+    """Merge projects that are the SAME across chunk boundaries, matched by fuzzy
+    title similarity. Used by the llm_detect path where one project can appear in
+    multiple overlapping chunks."""
+    from difflib import SequenceMatcher
+    merged: List[dict] = []
+    for p in projects:
+        tk = _title_key(p.get("project_title", ""))
+        hit = None
+        for m in merged:
+            mk = _title_key(m.get("project_title", ""))
+            if tk and mk and (tk == mk or SequenceMatcher(None, tk, mk).ratio() >= threshold):
+                hit = m; break
+        if hit:
+            _merge_into(hit, p)
+        else:
+            merged.append(dict(p))
+    return merged
+
+
+def _merge_into(base: dict, other: dict):
+    """Field-level merge: longest non-empty string, max number, max confidence."""
+    for k, v in other.items():
+        cur = base.get(k)
+        if isinstance(v, str):
+            if len(v.strip()) > len(str(cur or "").strip()):
+                base[k] = v
+        elif isinstance(v, (int, float)) and v is not None:
+            base[k] = max(cur or 0, v)
+        elif cur in (None, ""):
+            base[k] = v
+
+
+_SUBSTANCE = ["description", "technical_challenges_uncertainties",
+              "solutions_alternatives_considered", "supplies_used"]
+
+
+def _is_real_project(p: dict) -> bool:
+    """Guard against empty/junk records (stray LLM objects, table fragments).
+    Keep only if there's a plausible title AND at least one substantive field."""
+    title = re.sub(r"[^A-Za-z]", "", p.get("project_title") or "")
+    if len(title) < 3:
+        return False
+    has_text = any(str(p.get(f) or "").strip() for f in _SUBSTANCE)
+    has_num = p.get("total_man_hours") or p.get("employees_completing_research")
+    return bool(has_text or has_num)
+
+
+def _flag_review(p: dict):
+    reasons = []
+    if (p.get("confidence") or 0) < REVIEW_CONF:
+        reasons.append("low confidence")
+    missing = [f for f in KEY_FIELDS if not str(p.get(f) or "").strip()]
+    if missing:
+        reasons.append("missing: " + ", ".join(missing))
+    p["_needs_review"] = bool(reasons)
+    p["_review_reasons"] = reasons
+
+
+async def _process_section(sec: Section, sem: asyncio.Semaphore,
+                           tel: Telemetry, progress: Optional[Callable], lg=None) -> List[dict]:
+    async def guarded(t, tag):
+        async with sem:                              # cap concurrent LLM calls
+            return await _llm_call(t, tel, lg, tag)
+
+    if lg:
+        lg.log(f"  Section {sec.index} [{sec.strategy}] {sec.doc} {sec.pages} "
+               f"~{sec.token_est} tok"
+               + (f", {len(sec.chunks)} chunks" if sec.needs_chunking else ""))
+
+    if sec.strategy == "llm_detect":
+        # format-agnostic fallback: detect projects in EACH chunk, merge by title
+        tel.chunks += len(sec.chunks)
+        partials = await asyncio.gather(
+            *[guarded(c, f"s{sec.index}_chunk{i}") for i, c in enumerate(sec.chunks)])
+        found = [p for part in partials for p in part.get("projects", [])]
+        projects = merge_projects_by_title(found)
+        if lg:
+            lg.log(f"    merged {len(found)} chunk-projects -> {len(projects)} unique")
+    elif sec.needs_chunking:
+        # structural section too big for one call = ONE project across chunks
+        tel.chunks += len(sec.chunks)
+        partials = await asyncio.gather(
+            *[guarded(c, f"s{sec.index}_chunk{i}") for i, c in enumerate(sec.chunks)])
+        project = _reduce_partials(partials)
+        projects = [project] if project else []
+    else:
+        out = await guarded(sec.text, f"s{sec.index}")
+        projects = out.get("projects", [])
+
+    for p in projects:                               # provenance + review flags
+        p["_source_file"] = sec.doc
+        p["_source_pages"] = sec.pages
+        p["_detection"] = sec.strategy
+        if not p.get("project_title"):
+            p["project_title"] = sec.title_hint
+        _flag_review(p)
+    if progress:
+        progress(sec)
+    return projects
+
+
+# ----------------------------------------------------------------------
+# Orchestrator
+# ----------------------------------------------------------------------
+async def run_batch(paths: List[str], concurrency: int = MAX_CONCURRENCY,
+                    progress: Optional[Callable] = None, log: bool = True) -> dict:
+    t0 = time.time()
+    tel = Telemetry()
+    loop = asyncio.get_event_loop()
+
+    lg = None
+    if log:
+        from logger import RunLogger
+        lg = RunLogger(label=f"{len(paths)} file(s)")
+        mode = MODEL if os.environ.get("OPENAI_API_KEY") else "OFFLINE MOCK (no API key)"
+        lg.step("1/4", f"Received {len(paths)} file(s). LLM backend: {mode}")
+        for p in paths:
+            lg.log(f"      - {os.path.basename(p)}")
+
+    # Stage 1: parallel extraction across files (processes)
+    with ProcessPoolExecutor() as pool:
+        extracted = await asyncio.gather(
+            *[loop.run_in_executor(pool, _extract_worker, p) for p in paths])
+    if lg:
+        lg.step("2/4", "Extraction complete (PyMuPDF/pdfplumber/docx, in parallel):")
+        for name, text, meta in extracted:
+            lg.log(f"      {name}: {meta['pages']}p, {meta['chars']} chars, "
+                   f"needs_ocr={meta['needs_ocr']} [{meta['method']}]")
+            lg.save_text(f"01_extracted/{name}.txt", text)
+
+    # Stage 2: segment into sections
+    sections = segment_batch([(name, text) for name, text, _ in extracted])
+    tel.sections = len(sections)
+    if lg:
+        lg.step("3/4", f"Segmented into {len(sections)} section(s):")
+        lg.save_json("02_segmentation.json", [
+            {"doc": s.doc, "index": s.index, "strategy": s.strategy,
+             "token_est": s.token_est, "pages": s.pages,
+             "chunks": len(s.chunks), "title_hint": s.title_hint} for s in sections])
+
+    # Stage 3: bounded-concurrency prefill across all sections
+    sem = asyncio.Semaphore(concurrency)
+    if lg:
+        lg.log(f"  Running LLM prefill, max {concurrency} concurrent calls…")
+    per_section = await asyncio.gather(
+        *[_process_section(s, sem, tel, progress, lg) for s in sections])
+
+    # Stage 4: aggregate + drop empty/junk records
+    projects = [p for group in per_section for p in group if _is_real_project(p)]
+    needs_review = sum(1 for p in projects if p.get("_needs_review"))
+    strategies = {}
+    for s in sections:
+        strategies[s.strategy] = strategies.get(s.strategy, 0) + 1
+    result = {
+        "projects": projects,
+        "telemetry": {**asdict(tel), "files": len(paths),
+                      "projects": len(projects), "needs_review": needs_review,
+                      "strategies": strategies,
+                      "elapsed_ms": int((time.time() - t0) * 1000)},
+        "extraction": {name: meta for name, _, meta in extracted},
+    }
+
+    if lg:
+        lg.step("4/4", f"Done: {len(projects)} project(s), {needs_review} flagged for "
+                f"review, {tel.llm_calls} LLM call(s), {tel.cache_hits} cache hit(s), "
+                f"{result['telemetry']['elapsed_ms']}ms")
+        for p in projects:
+            flag = " ⚠REVIEW" if p.get("_needs_review") else ""
+            lg.log(f"      • [{p.get('tax_year')}] {p.get('project_title','?')[:50]} "
+                   f"(mh={p.get('total_man_hours')}, conf={p.get('confidence')}){flag}")
+        lg.save_json("04_result.json", result)
+        lg.log(f"Full logs saved to: {lg.dir}")
+        result["telemetry"]["run_id"] = lg.run_id
+        result["telemetry"]["log_dir"] = lg.dir
+
+    return result
+
+
+# ----------------------------------------------------------------------
+if __name__ == "__main__":
+    import sys
+    paths = sys.argv[1:]
+    if not paths:
+        print("usage: python3 pipeline.py file1.pdf [file2.pdf ...]"); raise SystemExit
+
+    def show(sec):
+        print(f"  ✓ {sec.doc} {sec.pages} ~{sec.token_est} tok | {sec.title_hint[:55]!r}")
+
+    out = asyncio.run(run_batch(paths, progress=show))
+    print("\n--- projects ---")
+    for i, p in enumerate(out["projects"], 1):
+        print(f"[{i}] {p.get('project_title','?')[:60]!r}  "
+              f"({p.get('_source_file')} {p.get('_source_pages')})  "
+              f"man_hrs={p.get('total_man_hours')} conf={p.get('confidence')}")
+    print("\n--- telemetry ---")
+    print(json.dumps(out["telemetry"], indent=2))
