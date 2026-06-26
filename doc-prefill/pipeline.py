@@ -188,11 +188,177 @@ _SUBSTANCE = ["description", "technical_challenges_uncertainties",
               "solutions_alternatives_considered", "supplies_used"]
 
 
+# ---------------------------------------------------------------------------
+# Canonical project list extraction + post-filter
+# ---------------------------------------------------------------------------
+
+def _extract_canonical_projects(texts: List[str]) -> List[str]:
+    """Regex scan across all extracted document texts to build a whitelist of
+    canonical top-level project titles.
+
+    Detects two document formats:
+      - Narrative study reports:  'Project Name: Job 314 - Coyote Flood Management'
+                                   or summary table rows ending in 'Qualified'
+      - Financial cost reports:   'Job: 314   COYOTE FLOOD MANAGEMENT'
+
+    Returns a deduplicated list of 'Job NNN - Title Case Name' strings.
+    If no job-numbered projects are detected the list is empty and the caller
+    skips filtering (so the pipeline still works on non-Job-Number documents).
+    """
+    from difflib import SequenceMatcher
+    combined = "\n".join(texts)
+    found: List[str] = []
+
+    # Pattern A — "Job NNN - Name" on its own or inside "Project Name: Job NNN - Name"
+    for m in re.finditer(
+        r"Job[\s:]+(\d+)\s*[-–]\s*([A-Za-z][^\n\|\r]{3,70}?)(?=\s{2,}|\s*\||\s*Qualified|\s*Not Qualified|\n|$)",
+        combined, re.I,
+    ):
+        num = m.group(1).strip()
+        name = m.group(2).strip().rstrip(".,;:")
+        if len(re.sub(r"[^A-Za-z]", "", name)) >= 4:
+            found.append(f"Job {num} - {name.title()}")
+
+    # Pattern B — cost-report header "Job: 314   COYOTE FLOOD MANAGEMENT"
+    for m in re.finditer(
+        r"Job:\s*(\d+)\s{2,}([A-Z][A-Z0-9 &,'-]{3,60}?)(?=\s*$|\s{2,}|\n)",
+        combined, re.M,
+    ):
+        num = m.group(1).strip()
+        name = m.group(2).strip().rstrip(".,;:")
+        if len(re.sub(r"[^A-Za-z]", "", name)) >= 4:
+            found.append(f"Job {num} - {name.title()}")
+
+    # Deduplicate — keep first occurrence of each fuzzy-unique title
+    result: List[str] = []
+    for title in found:
+        tk = _title_key(title)
+        # Prefer job-number exact match as dedup key
+        jn = re.search(r"\bjob\s*(\d+)\b", title, re.I)
+        already = False
+        for r in result:
+            rn = re.search(r"\bjob\s*(\d+)\b", r, re.I)
+            if jn and rn and jn.group(1) == rn.group(1):
+                already = True; break
+            if SequenceMatcher(None, tk, _title_key(r)).ratio() >= 0.85:
+                already = True; break
+        if not already:
+            result.append(title)
+    return result
+
+
+def _filter_to_canonical(
+    projects: List[dict],
+    doc_canonicals: dict,    # {doc_name: [canonical title, ...]}
+    all_canonical: List[str],  # deduplicated global canonical list
+) -> List[dict]:
+    """Per-document canonical filtering + cross-document deduplication.
+
+    Phase 1 — per-doc filtering:
+      • Projects from a doc WITH a canonical list (Job-Number documents) →
+        keep only those whose title matches the doc's canonical list.
+        Unmatched titles are false positives (sub-section headings, phase names)
+        and are dropped.
+      • Projects from a doc WITHOUT a canonical list (non-Job-Number narrative
+        PDFs, memos, etc.) → pass ALL through unchanged.
+
+    Phase 2 — cross-doc deduplication:
+      • Same project detected in multiple files → merge into one record using
+        fuzzy title matching (threshold 0.72 or exact Job Number match).
+      • Canonical title is always restored after merging so LLM-invented longer
+        strings can never overwrite the authoritative name.
+
+    Returns projects sorted: canonical projects first (in detected order),
+    followed by any non-canonical projects.
+    """
+    from difflib import SequenceMatcher
+
+    THRESHOLD = 0.72
+
+    def _best_match(title: str, canon_list: List[str]):
+        """Return (canonical_title, score) against a given canon list."""
+        tk = _title_key(title)
+        jn = re.search(r"\bjob\s*(\d+)\b", title, re.I)
+        best_c, best_s = None, 0.0
+        for c in canon_list:
+            cn = re.search(r"\bjob\s*(\d+)\b", c, re.I)
+            if jn and cn and jn.group(1) == cn.group(1):
+                return c, 1.0          # definitive job-number match
+            s = SequenceMatcher(None, tk, _title_key(c)).ratio()
+            if s > best_s:
+                best_s = s; best_c = c
+        return (best_c, best_s) if best_s >= THRESHOLD else (None, 0.0)
+
+    # ------------------------------------------------------------------ #
+    # Phase 1: per-document filter                                         #
+    # ------------------------------------------------------------------ #
+    kept: List[dict] = []
+    for p in projects:
+        source = p.get("_source_file", "")
+        doc_canon = doc_canonicals.get(source, [])
+        if doc_canon:
+            # This document has Job-Number projects — filter false positives.
+            c, _ = _best_match(p.get("project_title", ""), doc_canon)
+            if c:
+                p_copy = dict(p)
+                p_copy["project_title"] = c  # normalise to canonical name
+                kept.append(p_copy)
+            # else: silent drop — false positive (phase name, sub-heading, etc.)
+        else:
+            # No canonical list for this doc — pass through as-is.
+            kept.append(p)
+
+    # ------------------------------------------------------------------ #
+    # Phase 2: cross-document deduplication                               #
+    # ------------------------------------------------------------------ #
+    # Normalise all titles to canonical BEFORE merging so that LLM title
+    # variations ("Coyote Flood Management", "Job 314 Coyote Flood Mgmt",
+    # etc.) all become the same string and trivially merge by exact match.
+    for p in kept:
+        c, _ = _best_match(p.get("project_title", ""), all_canonical)
+        if c:
+            p["project_title"] = c
+
+    # Now merge — projects with identical canonical titles collapse into one.
+    merged = merge_projects_by_title(kept, threshold=THRESHOLD)
+
+    # Re-apply canonical restore after merge in case _merge_into overwrote.
+    for p in merged:
+        c, _ = _best_match(p.get("project_title", ""), all_canonical)
+        if c:
+            p["project_title"] = c
+
+    # Sort: canonical projects first (in canonical order), then others.
+    def _sort_key(p):
+        title = p.get("project_title", "")
+        c, s = _best_match(title, all_canonical)
+        return (all_canonical.index(c) if c and c in all_canonical
+                else len(all_canonical))
+
+    merged.sort(key=_sort_key)
+    return merged
+
+
+# Internal placeholder values that should never reach the UI as a project title.
+_TITLE_PLACEHOLDERS = {"(auto-detect projects)", "auto-detect projects", "untitled project", ""}
+
+
 def _is_real_project(p: dict) -> bool:
-    """Guard against empty/junk records (stray LLM objects, table fragments).
-    Keep only if there's a plausible title AND at least one substantive field."""
-    title = re.sub(r"[^A-Za-z]", "", p.get("project_title") or "")
-    if len(title) < 3:
+    """Guard against empty/junk records (stray LLM objects, table fragments,
+    internal pipeline placeholders).
+
+    A record is kept only when ALL of the following hold:
+      1. project_title is a real name — not empty and not an internal placeholder.
+      2. The title has at least 3 alphabetic characters.
+      3. At least one substantive content field is non-empty OR numeric fields
+         are present — a title alone with no supporting content is dropped.
+    """
+    raw_title = (p.get("project_title") or "").strip()
+    # Reject internal placeholder titles that the pipeline injects as fallbacks.
+    if raw_title.lower() in _TITLE_PLACEHOLDERS:
+        return False
+    alpha_title = re.sub(r"[^A-Za-z]", "", raw_title)
+    if len(alpha_title) < 3:
         return False
     has_text = any(str(p.get(f) or "").strip() for f in _SUBSTANCE)
     has_num = p.get("total_man_hours") or p.get("employees_completing_research")
@@ -245,8 +411,9 @@ async def _process_section(sec: Section, sem: asyncio.Semaphore,
         p["_source_file"] = sec.doc
         p["_source_pages"] = sec.pages
         p["_detection"] = sec.strategy
-        if not p.get("project_title"):
-            p["project_title"] = sec.title_hint
+        # Do NOT fall back to the internal title_hint placeholder — an empty
+        # project_title means the LLM couldn't identify a project name, and
+        # _is_real_project() will correctly drop this record downstream.
         _flag_review(p)
     if progress:
         progress(sec)
@@ -301,6 +468,35 @@ async def run_batch(paths: List[str], concurrency: int = MAX_CONCURRENCY,
 
     # Stage 4: aggregate + drop empty/junk records
     projects = [p for group in per_section for p in group if _is_real_project(p)]
+
+    # Stage 4b: per-document canonical filter + cross-document deduplication.
+    # For each file, detect its canonical Job-Number project list. Documents
+    # that have a canonical list get false-positive filtering; documents without
+    # one (narrative PDFs without Job Numbers) pass all their projects through.
+    doc_canonicals = {name: _extract_canonical_projects([text])
+                      for name, text, _ in extracted}
+
+    # Build deduplicated global canonical list (across all docs).
+    all_canonical: List[str] = []
+    _seen_job_nums: set = set()
+    for cs in doc_canonicals.values():
+        for c in cs:
+            jn = re.search(r"\bjob\s*(\d+)\b", c, re.I)
+            key = jn.group(1) if jn else _title_key(c)
+            if key not in _seen_job_nums:
+                _seen_job_nums.add(key)
+                all_canonical.append(c)
+
+    if any(doc_canonicals.values()):
+        if lg:
+            lg.log(f"  Canonical project list ({len(all_canonical)}): "
+                   + ", ".join(f'"{c}"' for c in all_canonical))
+            docs_without = [n for n, cs in doc_canonicals.items() if not cs]
+            if docs_without:
+                lg.log(f"  Pass-through docs (no Job-Number format): "
+                       + ", ".join(docs_without))
+        projects = _filter_to_canonical(projects, doc_canonicals, all_canonical)
+
     needs_review = sum(1 for p in projects if p.get("_needs_review"))
     strategies = {}
     for s in sections:

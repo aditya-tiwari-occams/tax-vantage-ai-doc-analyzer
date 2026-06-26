@@ -27,7 +27,11 @@ CHARS_PER_TOKEN = 4
 # well below where "lost in the middle" degrades long-context recall.
 MAX_SINGLE_CALL_TOKENS = 12000
 CHUNK_TOKENS = 6000            # target size of each chunk when a doc is oversized
-CHUNK_OVERLAP_TOKENS = 250     # overlap so a project split across a boundary survives
+CHUNK_OVERLAP_TOKENS = 600     # increased overlap so a project split across a boundary survives
+# First N chars of a document prepended to every chunk so the LLM always has the
+# cover page context (company name, project list, Job Number, tax year) even in
+# middle chunks where that context would otherwise be missing.
+HEADER_CHARS = 1500
 
 
 @dataclass
@@ -88,8 +92,13 @@ def trim_boilerplate(text: str) -> str:
     return "\n".join(out)
 
 
-def _chunk(text: str) -> List[str]:
-    """Overlapping chunks by paragraph, sized in tokens."""
+def _chunk(text: str, header: str = "") -> List[str]:
+    """Overlapping chunks by paragraph, sized in tokens.
+
+    Each chunk is optionally prefixed with the document header (cover page /
+    report header lines) so the LLM always has the project identity context
+    even in middle or tail chunks where that context would otherwise be absent.
+    """
     paras = re.split(r"\n\s*\n", text)
     chunks, cur, cur_tok = [], [], 0
     overlap_chars = CHUNK_OVERLAP_TOKENS * CHARS_PER_TOKEN
@@ -104,7 +113,42 @@ def _chunk(text: str) -> List[str]:
             cur.append(p); cur_tok += ptok
     if cur:
         chunks.append("\n\n".join(cur))
+
+    if header:
+        # Wrap the header in an explicit instruction block so the LLM understands
+        # it is receiving the authoritative document context — not just raw text.
+        # This tells the model exactly what the valid top-level projects are, and
+        # that sub-headings in the chunk body are analytical content, not new projects.
+        instruction = (
+            "=== DOCUMENT CONTEXT (authoritative — read before processing the text below) ===\n"
+            "The section below is the beginning of the source document (cover page, report "
+            "header, or executive summary). It establishes the CANONICAL project list for "
+            "this document. Use the Job Numbers and project names found here as the ONLY "
+            "valid top-level project identifiers.\n\n"
+            "Any names you encounter in the text that follows (e.g. descriptive sub-headings "
+            "within sections labeled iii, iv, v, vi, or phase/activity descriptions) are "
+            "analytical content ABOUT one of these projects — they are NOT new projects. "
+            "Map all extracted data back to the canonical projects listed here.\n\n"
+            + header
+            + "\n=== END DOCUMENT CONTEXT — DOCUMENT CONTENT CONTINUES BELOW ==="
+        )
+        sep = "\n\n"
+        chunks = [instruction + sep + c if not c.startswith(instruction) else c
+                  for c in chunks]
     return chunks
+
+
+def _extract_header(text: str) -> str:
+    """Return the first HEADER_CHARS characters of the document, trimmed to a
+    clean paragraph boundary. This is the cover page / report header block that
+    contains the company name, Job Number, project list, and tax year — the
+    context the LLM needs even when processing a middle or tail chunk."""
+    head = text[:HEADER_CHARS]
+    # Prefer ending at a paragraph boundary so we don't cut mid-sentence.
+    last_break = head.rfind("\n\n")
+    if last_break > HEADER_CHARS // 2:
+        head = head[:last_break]
+    return head.strip()
 
 
 def segment_document(doc_name: str, text: str, start_index: int = 0,
@@ -119,7 +163,9 @@ def segment_document(doc_name: str, text: str, start_index: int = 0,
       >  MAX_SINGLE_CALL_TOKENS  -> "llm_detect": chunk by size (overlapping); the LLM
                                     detects projects in each chunk and the pipeline
                                     merges duplicates by title. Avoids lost-in-the-
-                                    middle on huge docs.
+                                    middle on huge docs. Each chunk is prefixed with
+                                    the document header so project identity context
+                                    is never lost in middle chunks.
 
     `trim_boilerplate` first collapses giant repetitive tables (e.g. per-employee
     wage rows) so token counts reflect real content, not noise.
@@ -135,10 +181,12 @@ def segment_document(doc_name: str, text: str, start_index: int = 0,
                       token_est=tok, pages=_page_span(text), strategy="whole_doc")
         return [sec]
 
+    header = _extract_header(text)
     sec = Section(doc=doc_name, index=start_index,
                   title_hint="(auto-detect projects)", text=text,
                   token_est=tok, pages=_page_span(text),
-                  needs_chunking=True, chunks=_chunk(text), strategy="llm_detect")
+                  needs_chunking=True, chunks=_chunk(text, header=header),
+                  strategy="llm_detect")
     return [sec]
 
 
