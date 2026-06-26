@@ -142,6 +142,25 @@
   .hint{background:var(--orange-tint);border:1px solid #f6d3c4;color:#8a4326;border-radius:10px;
         padding:10px 14px;font-size:13px;margin-top:18px;display:flex;gap:8px;align-items:flex-start}
   @media(max-width:820px){.sidebar{display:none}.grid2,.grid3,.toggles{grid-template-columns:1fr}}
+
+  /* ---------- Info / Warning modal ---------- */
+  .info-modal-bg{position:fixed;inset:0;background:rgba(16,24,40,.5);display:none;
+                 align-items:center;justify-content:center;z-index:100}
+  .info-modal-bg.show{display:flex}
+  .info-modal{background:#fff;border-radius:16px;width:min(500px,90vw);padding:30px 28px 24px;
+              box-shadow:0 24px 64px rgba(0,0,0,.22);animation:modalIn .18s ease}
+  @keyframes modalIn{from{opacity:0;transform:scale(.95)}to{opacity:1;transform:scale(1)}}
+  .info-modal .im-icon{width:48px;height:48px;border-radius:12px;display:grid;place-items:center;margin-bottom:16px}
+  .info-modal .im-icon.warn{background:#fff4e5}.info-modal .im-icon.warn svg{color:#b9770e}
+  .info-modal .im-icon.info{background:#eef2ff}.info-modal .im-icon.info svg{color:#4338ca}
+  .info-modal h3{margin:0 0 10px;font-size:18px;font-weight:700;color:var(--ink)}
+  .info-modal p{margin:0 0 10px;color:#4b5563;font-size:14.5px;line-height:1.6}
+  .info-modal ul{margin:8px 0 14px;padding:0 0 0 18px;color:#4b5563;font-size:14px;line-height:1.7}
+  .info-modal ul li{margin-bottom:3px}
+  .info-modal .im-actions{display:flex;justify-content:flex-end;margin-top:18px}
+  .info-modal .btn-primary{background:var(--orange);color:#fff;border:none;border-radius:9px;
+                            padding:11px 22px;font-size:14.5px;font-weight:600;cursor:pointer}
+  .info-modal .btn-primary:hover{background:var(--orange-dark)}
 </style>
 </head>
 <body>
@@ -488,7 +507,30 @@ startBtn.onclick=async ()=>{
     await new Promise(r=>setTimeout(r,300));
     closeModal();
     const projects=(data.projects||[]).map(mapApiProject);
-    if(!projects.length){ alert('No projects were detected in those documents.'); return; }
+    const warnings = data.warnings || [];
+    const message  = data.message  || '';
+
+    if(!projects.length){
+      closeModal();
+      showInfoModal({
+        type:    'warn',
+        title:   'No R&D projects detected',
+        body:    message || 'No R&D project data was found in the uploaded files.',
+        bullets: warnings,
+      });
+      return;
+    }
+
+    // Surface any per-file warnings (duplicates, overlapping ranges, wrong files)
+    if(warnings.length){
+      showInfoModal({
+        type:    'info',
+        title:   `${projects.length} project${projects.length>1?'s':''} found — some files had notices`,
+        body:    'The following issues were detected during processing:',
+        bullets: warnings,
+      });
+    }
+
     projects.forEach(p=>addProject(p));
     updateYearLabel(projects);
   }catch(err){
@@ -501,6 +543,57 @@ startBtn.onclick=async ()=>{
     setTimeout(()=>{ closeModal(); procNote.style.color=''; MOCK_PREFILL.forEach(p=>addProject(p)); }, 1200);
   }
 };
+
+// ---------- Info / Warning modal helper ----------
+function showInfoModal({ title, body, bullets = [], type = 'warn' }) {
+  const bg   = document.getElementById('infoModalBg');
+  const icon = document.getElementById('infoModalIcon');
+  const ttl  = document.getElementById('infoModalTitle');
+  const bd   = document.getElementById('infoModalBody');
+  const lst  = document.getElementById('infoModalList');
+
+  ttl.textContent = title;
+  bd.textContent  = body;
+  icon.className  = 'im-icon ' + type;
+
+  // swap icon svg for warn vs info
+  if (type === 'warn') {
+    icon.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="26" height="26">
+      <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+      <line x1="12" y1="9" x2="12" y2="13"/><circle cx="12" cy="17" r=".5" fill="currentColor"/>
+    </svg>`;
+  } else {
+    icon.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="26" height="26">
+      <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/>
+      <circle cx="12" cy="16.5" r=".5" fill="currentColor"/>
+    </svg>`;
+  }
+
+  if (bullets.length) {
+    lst.style.display = 'block';
+    lst.innerHTML = bullets.map(b => `<li>${b}</li>`).join('');
+  } else {
+    lst.style.display = 'none';
+    lst.innerHTML = '';
+  }
+
+  bg.classList.add('show');
+  // close on backdrop click
+  bg.onclick = e => { if (e.target === bg) bg.classList.remove('show'); };
+}
 </script>
+
+<!-- Info / Warning modal -->
+<div class="info-modal-bg" id="infoModalBg">
+  <div class="info-modal" role="dialog" aria-modal="true">
+    <div class="im-icon warn" id="infoModalIcon"></div>
+    <h3 id="infoModalTitle"></h3>
+    <p id="infoModalBody"></p>
+    <ul id="infoModalList"></ul>
+    <div class="im-actions">
+      <button class="btn-primary" onclick="document.getElementById('infoModalBg').classList.remove('show')">Got it</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>

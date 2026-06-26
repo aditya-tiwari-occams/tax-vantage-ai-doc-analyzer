@@ -16,7 +16,7 @@ Run it:
 Then open  http://localhost:8001  in your browser.
 """
 from __future__ import annotations
-import os, tempfile, shutil, traceback
+import os, tempfile, shutil, traceback, hashlib
 from typing import List
 
 from fastapi import FastAPI, UploadFile, File
@@ -56,7 +56,10 @@ async def prefill(files: List[UploadFile] = File(...)):
 
     tmp = tempfile.mkdtemp(prefix="upload_")
     paths = []
+    warnings = []
     try:
+        seen_hashes: dict[str, str] = {}   # hash -> first filename (Scenario H)
+
         for f in files:
             ext = os.path.splitext(f.filename or "")[1].lower()
             if ext not in ALLOWED:
@@ -66,12 +69,58 @@ async def prefill(files: List[UploadFile] = File(...)):
             if len(data) > MAX_BYTES:
                 return JSONResponse(
                     {"error": f"File too large: {f.filename}"}, status_code=400)
+
+            # --- Scenario H: duplicate file detection ---
+            file_hash = hashlib.sha256(data).hexdigest()
+            if file_hash in seen_hashes:
+                warnings.append(
+                    f"Duplicate file detected: '{f.filename}' is identical to "
+                    f"'{seen_hashes[file_hash]}'. Processing only the first copy "
+                    f"to avoid double-counting hours.")
+                continue                       # skip the duplicate
+            seen_hashes[file_hash] = f.filename or "unknown"
+
+            # --- Scenario L: detect empty/unreadable files before saving ---
+            if len(data) == 0:
+                warnings.append(
+                    f"File '{f.filename}' is empty and was skipped.")
+                continue
+
             p = os.path.join(tmp, os.path.basename(f.filename))
             with open(p, "wb") as out:
                 out.write(data)
             paths.append(p)
 
+        if not paths:
+            return JSONResponse({
+                "error": "No processable files remain after deduplication/validation.",
+                "warnings": warnings,
+            }, status_code=400)
+
         result = await run_batch(paths)
+
+        # Attach any file-level warnings to the response
+        if warnings:
+            result.setdefault("warnings", []).extend(warnings)
+
+        # --- Scenario E: no projects found ---
+        if not result.get("projects"):
+            result["message"] = (
+                "No R&D project data was found in the uploaded files. "
+                "The files may be scanned images, contain only administrative data, "
+                "or not reference any identifiable R&D projects. "
+                "Please upload project cost reports, payroll records, technical "
+                "proposals, or R&D study documents.")
+            # Surface scanned-file warnings (Scenario K)
+            scanned = [name for name, meta in result.get("extraction", {}).items()
+                       if meta.get("needs_ocr")]
+            if scanned:
+                result["message"] += (
+                    f" Note: the following file(s) appear to be scanned images "
+                    f"with no text layer and could not be read: "
+                    + ", ".join(f"'{s}'" for s in scanned)
+                    + ". Please upload text-selectable PDF versions.")
+
         return JSONResponse(result)
     except Exception as e:                       # don't leak stack traces to UI
         traceback.print_exc()

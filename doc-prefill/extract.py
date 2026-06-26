@@ -157,11 +157,29 @@ def _normalize(s: str) -> str:
 
 def extract(path: str) -> ExtractionResult:
     ext = os.path.splitext(path)[1].lower()
-    if ext == ".pdf":
-        return extract_pdf(path)
-    if ext in (".docx", ".doc"):
-        return extract_docx(path)
-    raise ValueError(f"Unsupported file type: {ext}")
+    try:
+        if ext == ".pdf":
+            return extract_pdf(path)
+        if ext in (".docx", ".doc"):
+            return extract_docx(path)
+        raise ValueError(f"Unsupported file type: {ext}")
+    except Exception as e:
+        msg = str(e).lower()
+        # Scenario L: password-protected PDFs
+        if "password" in msg or "encrypted" in msg or "decryptionerror" in msg:
+            return ExtractionResult(
+                text="", page_count=0, char_count=0, needs_ocr=False,
+                warnings=[f"File is password-protected and cannot be opened. "
+                           f"Please upload an unlocked version."],
+                method="failed:encrypted",
+            )
+        # Scenario L: corrupt/unreadable files
+        return ExtractionResult(
+            text="", page_count=0, char_count=0, needs_ocr=False,
+            warnings=[f"File could not be parsed ({type(e).__name__}: {e}). "
+                       f"Please re-upload a readable version."],
+            method="failed:corrupt",
+        )
 
 
 if __name__ == "__main__":

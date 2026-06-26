@@ -41,6 +41,158 @@ MAX_RETRIES = int(os.environ.get("PREFILL_MAX_RETRIES", "4"))
 
 
 # ----------------------------------------------------------------------
+# Scenario I: overlapping date range detection
+# When two files for the same Job Number cover overlapping periods, use
+# only the one with the broader range to avoid double-counting hours.
+# ----------------------------------------------------------------------
+def _parse_date_range(text: str):
+    """Extract (start, end) as comparable YYYYMMDD strings from document text.
+    Looks for patterns like 'From 01/01/25 To 10/31/25' or 'From: 01/01/2025'.
+    Returns (None, None) if no date range is found.
+    """
+    m = re.search(
+        r"From[\s:]+(\d{1,2}/\d{1,2}/\d{2,4})\s+To[\s:]+(\d{1,2}/\d{1,2}/\d{2,4})",
+        text, re.I,
+    )
+    if not m:
+        return None, None
+
+    def _norm(d: str) -> str:
+        parts = d.split("/")
+        mm, dd = parts[0].zfill(2), parts[1].zfill(2)
+        yy = parts[2]
+        yyyy = ("20" + yy) if len(yy) == 2 else yy
+        return f"{yyyy}{mm}{dd}"
+
+    return _norm(m.group(1)), _norm(m.group(2))
+
+
+def _deduplicate_overlapping_ranges(extracted: List[tuple], lg=None) -> List[tuple]:
+    """Scenario I: for each Job Number, keep only the file(s) covering the
+    broadest date range. Files with non-overlapping ranges are all kept.
+    Files that are a strict subset of another file's range are dropped.
+
+    extracted: [(name, text, meta), ...]
+    Returns filtered list with a warning list.
+    """
+    from difflib import SequenceMatcher
+
+    # Extract job number + date range per file
+    file_info: List[dict] = []
+    for name, text, meta in extracted:
+        job_m = re.search(r"Job[\s:]+(\d+)\b", text[:2000], re.I)
+        job_num = job_m.group(1).strip() if job_m else None
+        start, end = _parse_date_range(text[:2000])
+        file_info.append({"name": name, "job": job_num, "start": start, "end": end})
+
+    skipped: set[str] = set()
+    overlap_warnings: List[str] = []
+
+    # Group by job number and check for subset ranges
+    job_files: dict[str, List[int]] = {}
+    for i, fi in enumerate(file_info):
+        if fi["job"] and fi["start"] and fi["end"]:
+            job_files.setdefault(fi["job"], []).append(i)
+
+    for job_num, indices in job_files.items():
+        if len(indices) < 2:
+            continue
+        for i in indices:
+            for j in indices:
+                if i == j or file_info[i]["name"] in skipped:
+                    continue
+                # Is file i a strict subset of file j's date range?
+                if (file_info[j]["start"] <= file_info[i]["start"] and
+                        file_info[j]["end"] >= file_info[i]["end"] and
+                        (file_info[j]["start"] != file_info[i]["start"] or
+                         file_info[j]["end"] != file_info[i]["end"])):
+                    skipped.add(file_info[i]["name"])
+                    overlap_warnings.append(
+                        f"Scenario I — Overlapping date ranges for Job {job_num}: "
+                        f"'{file_info[i]['name']}' "
+                        f"({file_info[i]['start'][:4]}/{file_info[i]['start'][4:6]}"
+                        f"–{file_info[i]['end'][:4]}/{file_info[i]['end'][4:6]}) "
+                        f"is a subset of '{file_info[j]['name']}' "
+                        f"({file_info[j]['start'][:4]}/{file_info[j]['start'][4:6]}"
+                        f"–{file_info[j]['end'][:4]}/{file_info[j]['end'][4:6]}). "
+                        f"Skipping to avoid double-counting hours.")
+
+    if skipped and lg:
+        for w in overlap_warnings:
+            lg.log(f"  ⚠ {w}")
+
+    result = [(n, t, m) for n, t, m in extracted if n not in skipped]
+    return result, overlap_warnings
+
+
+# ----------------------------------------------------------------------
+# WF guardrails: wrong-file detection (Part 12 / Scenarios WF-1 to WF-4)
+# ----------------------------------------------------------------------
+
+# Keywords that strongly suggest a document contains R&D project data.
+_RD_SIGNALS_Q2 = [
+    r"\bhours?\b", r"\bman.?hours?\b", r"\bpayroll\b", r"\blabor\b",
+    r"\bemployee\b", r"\bphase\b", r"\bjob\b", r"\bproject\b",
+    r"\btechnical\b", r"\buncertainty\b", r"\bexperimentation\b",
+    r"\br&d\b", r"\bresearch\b", r"\bdevelopment\b", r"\bcost\b",
+    r"\bqualified\b", r"\btax credit\b", r"\birc.*41\b",
+]
+
+# Keywords that strongly suggest a generic/non-project document.
+_GENERIC_SIGNALS = [
+    r"\bhandbook\b", r"\bonboarding\b", r"\btravel policy\b",
+    r"\bcode of conduct\b", r"\bbenefits\b", r"\bvacation\b",
+    r"\bbalance sheet\b", r"\bincome statement\b", r"\bp&l\b",
+    r"\bprofit.{0,5}loss\b", r"\bannual report\b",
+]
+
+
+def _wrong_file_test(name: str, text: str) -> tuple[bool, str]:
+    """Run the 3-question wrong-file test from Part 12 / WF guardrails.
+
+    Q1: Does this file contain a named project, job, product, or initiative?
+    Q2: Does this file contain hours, costs, employees, or technical R&D content?
+    Q3: Is the content specific to an identifiable entity (not generic policy)?
+
+    Returns (is_valid_rd_file, reason_if_invalid).
+    """
+    sample = text[:3000].lower()
+
+    # Fast path: file is nearly empty (scanned / corrupt / unreadable)
+    if len(text.strip()) < 50:
+        return False, (
+            f"File '{name}' contains almost no text. "
+            "It may be a scanned image, password-protected, or corrupt. "
+            "Please upload a text-selectable version.")
+
+    # Q3 fast-fail: obvious generic/policy document
+    for pat in _GENERIC_SIGNALS:
+        if re.search(pat, sample, re.I):
+            return False, (
+                f"File '{name}' appears to be a general company document "
+                f"(HR policy, financial statement, or similar), not an R&D project file. "
+                "Please upload project cost reports, payroll records, or technical documents.")
+
+    # Q1: does it reference a named project or job?
+    q1 = bool(
+        re.search(r"job\s*[:#]?\s*\d+|project\s*[:#]|contract\s*[:#]|"
+                  r"project name|business component|r&d.{0,10}study", sample, re.I)
+    )
+
+    # Q2: does it contain R&D-relevant data signals?
+    q2 = sum(1 for pat in _RD_SIGNALS_Q2 if re.search(pat, sample, re.I)) >= 3
+
+    if not q1 and not q2:
+        return False, (
+            f"File '{name}' does not appear to contain R&D project data. "
+            "No project identifiers, hours, employees, or technical R&D content "
+            "were found. Please upload project cost reports, payroll records, "
+            "proposals, or R&D study documents.")
+
+    return True, ""
+
+
+# ----------------------------------------------------------------------
 # Stage 1: extraction (runs inside a separate process; must be top-level)
 # ----------------------------------------------------------------------
 def _extract_worker(path: str) -> tuple:
@@ -360,18 +512,67 @@ def _is_real_project(p: dict) -> bool:
     alpha_title = re.sub(r"[^A-Za-z]", "", raw_title)
     if len(alpha_title) < 3:
         return False
-    has_text = any(str(p.get(f) or "").strip() for f in _SUBSTANCE)
+    has_text = any(
+        str(p.get(f) or "").strip() and p.get(f) != _NOT_FOUND_MARKER
+        for f in _SUBSTANCE
+    )
     has_num = p.get("total_man_hours") or p.get("employees_completing_research")
     return bool(has_text or has_num)
+
+
+# String fields that should show "[Not found in uploaded documents]" rather
+# than empty string when the LLM couldn't find them (Scenario F).
+_NOT_FOUND_MARKER = "[Not found in uploaded documents]"
+_TEXT_FIELDS = [
+    "description", "technical_challenges_uncertainties",
+    "solutions_alternatives_considered", "supplies_used",
+    "contract_type",
+]
+
+
+def _apply_not_found_markers(p: dict) -> dict:
+    """Scenario F: Replace empty string fields with the not-found marker so
+    the UI can clearly distinguish 'AI left this blank intentionally' from
+    'this field was not populated' — preventing silent blank submissions."""
+    for field in _TEXT_FIELDS:
+        val = p.get(field)
+        if isinstance(val, str) and not val.strip():
+            p[field] = _NOT_FOUND_MARKER
+    return p
+
+
+def _flag_scenario_j(p: dict):
+    """Scenario J: If the project title has no Job Number / Project Number,
+    flag it and cap confidence at 0.7 (moderate tier) since the identifier
+    is ambiguous — we are using the project name itself as the dedup key."""
+    title = p.get("project_title") or ""
+    has_job_number = bool(re.search(r"\bjob\s*\d+\b|\bproject\s*#?\s*\w+\b|\bcontract\s+\w+", title, re.I))
+    if not has_job_number:
+        p["_no_job_number"] = True
+        p["_identifier_note"] = (
+            "[No Job Number found — using project name as identifier. "
+            "Confidence capped at 70%. Please verify project identity.]"
+        )
+        # Cap confidence at 0.7 as per Scenario J spec (60-70% range)
+        if (p.get("confidence") or 0) > 0.70:
+            p["confidence"] = 0.70
+    else:
+        p["_no_job_number"] = False
+        p["_identifier_note"] = ""
 
 
 def _flag_review(p: dict):
     reasons = []
     if (p.get("confidence") or 0) < REVIEW_CONF:
         reasons.append("low confidence")
-    missing = [f for f in KEY_FIELDS if not str(p.get(f) or "").strip()]
+    # Check against the marker as well as empty string
+    missing = [f for f in KEY_FIELDS
+               if not str(p.get(f) or "").strip()
+               or p.get(f) == _NOT_FOUND_MARKER]
     if missing:
         reasons.append("missing: " + ", ".join(missing))
+    if p.get("_no_job_number"):
+        reasons.append("no job number — identifier is project name only")
     p["_needs_review"] = bool(reasons)
     p["_review_reasons"] = reasons
 
@@ -414,6 +615,8 @@ async def _process_section(sec: Section, sem: asyncio.Semaphore,
         # Do NOT fall back to the internal title_hint placeholder — an empty
         # project_title means the LLM couldn't identify a project name, and
         # _is_real_project() will correctly drop this record downstream.
+        _apply_not_found_markers(p)                  # Scenario F
+        _flag_scenario_j(p)                          # Scenario J
         _flag_review(p)
     if progress:
         progress(sec)
@@ -448,6 +651,38 @@ async def run_batch(paths: List[str], concurrency: int = MAX_CONCURRENCY,
             lg.log(f"      {name}: {meta['pages']}p, {meta['chars']} chars, "
                    f"needs_ocr={meta['needs_ocr']} [{meta['method']}]")
             lg.save_text(f"01_extracted/{name}.txt", text)
+
+    # WF guardrails: 3-question wrong-file detection. Filter out files that
+    # clearly contain no R&D project data (policy docs, P&L statements, etc.)
+    wf_warnings: List[str] = []
+    valid_extracted = []
+    for item in extracted:
+        name, text, meta = item
+        ok, reason = _wrong_file_test(name, text)
+        if ok:
+            valid_extracted.append(item)
+        else:
+            wf_warnings.append(reason)
+            if lg:
+                lg.log(f"  ⚠ WF: {reason}")
+    extracted = valid_extracted
+    if not extracted:
+        return {
+            "projects": [],
+            "warnings": wf_warnings,
+            "message": (
+                "No R&D project data was found in any of the uploaded files. "
+                + " ".join(wf_warnings)),
+            "telemetry": {"files": len(paths), "projects": 0,
+                          "elapsed_ms": int((time.time() - t0) * 1000)},
+            "extraction": {},
+        }
+
+    # Scenario I: drop files whose date range is a strict subset of another
+    # file for the same Job Number — prevents double-counting labor hours.
+    extracted, overlap_warnings = _deduplicate_overlapping_ranges(list(extracted), lg)
+    if overlap_warnings and lg:
+        lg.log(f"  Overlap dedup: {len(overlap_warnings)} file(s) skipped.")
 
     # Stage 2: segment into sections
     sections = segment_batch([(name, text) for name, text, _ in extracted])
@@ -508,6 +743,7 @@ async def run_batch(paths: List[str], concurrency: int = MAX_CONCURRENCY,
                       "strategies": strategies,
                       "elapsed_ms": int((time.time() - t0) * 1000)},
         "extraction": {name: meta for name, _, meta in extracted},
+        "warnings": overlap_warnings + wf_warnings,
     }
 
     if lg:
