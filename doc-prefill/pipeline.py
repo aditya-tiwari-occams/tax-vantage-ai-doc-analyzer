@@ -306,14 +306,29 @@ def _title_key(t: str) -> str:
 def merge_projects_by_title(projects: List[dict], threshold: float = 0.82) -> List[dict]:
     """Merge projects that are the SAME across chunk boundaries, matched by fuzzy
     title similarity. Used by the llm_detect path where one project can appear in
-    multiple overlapping chunks."""
+    multiple overlapping chunks.
+
+    Job Number is the authoritative dedup key: if two records both have explicit
+    Job Numbers and those numbers differ, they are always DIFFERENT projects —
+    fuzzy similarity is skipped to prevent geographically similar names
+    (e.g. 'West South Bay' vs 'East South Bay') from being incorrectly merged.
+    """
     from difflib import SequenceMatcher
     merged: List[dict] = []
     for p in projects:
         tk = _title_key(p.get("project_title", ""))
+        pjn = re.search(r"\bjob\s*(\d+)\b", p.get("project_title", ""), re.I)
         hit = None
         for m in merged:
             mk = _title_key(m.get("project_title", ""))
+            mjn = re.search(r"\bjob\s*(\d+)\b", m.get("project_title", ""), re.I)
+            # If both have explicit Job Numbers, use number as the sole dedup key
+            if pjn and mjn:
+                if pjn.group(1) == mjn.group(1):
+                    hit = m; break    # same Job Number → merge
+                else:
+                    continue          # different Job Numbers → never merge
+            # Fallback: fuzzy check when one/both titles have no Job Number
             if tk and mk and (tk == mk or SequenceMatcher(None, tk, mk).ratio() >= threshold):
                 hit = m; break
         if hit:
@@ -348,10 +363,15 @@ def _extract_canonical_projects(texts: List[str]) -> List[str]:
     """Regex scan across all extracted document texts to build a whitelist of
     canonical top-level project titles.
 
-    Detects two document formats:
-      - Narrative study reports:  'Project Name: Job 314 - Coyote Flood Management'
-                                   or summary table rows ending in 'Qualified'
-      - Financial cost reports:   'Job: 314   COYOTE FLOOD MANAGEMENT'
+    Detects four document formats:
+      A - Narrative study (dash):       'Job 314 - Coyote Flood Management'
+                                         or 'Project Name: Job 314 - ...'
+      B - Cost-report header:            'Job: 314   COYOTE FLOOD MANAGEMENT'
+      C - Parenthetical (Occams multi):  'the Foo Bar project (Job 356)'
+                                         or 'Project N: Foo Bar (Job 356)'
+      D - Comma-list executive summary:  'Jobs 314, 317, 338, 350, 351, and 356'
+          (for D we only get numbers; names are filled in by any of A/B/C that
+           match the same number, or left as 'Job NNN' if no name found)
 
     Returns a deduplicated list of 'Job NNN - Title Case Name' strings.
     If no job-numbered projects are detected the list is empty and the caller
@@ -381,22 +401,128 @@ def _extract_canonical_projects(texts: List[str]) -> List[str]:
         if len(re.sub(r"[^A-Za-z]", "", name)) >= 4:
             found.append(f"Job {num} - {name.title()}")
 
-    # Deduplicate — keep first occurrence of each fuzzy-unique title
+    # Pattern E — structured project section headers (highest quality, no prose context)
+    # Matches two header formats used in Occams multi-year studies:
+    #   "Project N: Coyote Flood Management — Sheet Pile Flood Control Wall (Job 314)"
+    #   "Project: Coyote Flood Management — Sheet Pile Flood Control Wall (Job 314)"
+    #   "Project: Tunitas Creek Beach Improvements — ADA Pathway and Handrail\nSystem (Job 317)"
+    # Takes ONLY the primary name before the em-dash.
+    # Pre-processing: join lines where "(Job NNN)" falls on the line immediately
+    # after the project name because of PDF column-wrapping.
+    joined = re.sub(
+        r"([^\n]{10,})\n([^\n]{1,40})\s*(\(Job\s+\d+\))",
+        lambda m: m.group(1) + " " + m.group(2) + " " + m.group(3),
+        combined,
+    )
+
+    _e_hits: set[str] = set()   # job numbers already captured by Pattern E
+    for m in re.finditer(
+        r"Project\s*(?:\d+\s*)?[:\-]\s*"     # "Project N:" or "Project:"
+        r"([A-Za-z][^\n—–(]{4,80}?)"         # primary project name (stops at em-dash)
+        r"\s*(?:[—–][^\n(]*)?"               # optional " — sub-description"
+        r"\s*\(Job\s+(\d+)\)",               # (Job NNN)
+        joined, re.I,
+    ):
+        name_raw = m.group(1).strip().rstrip("—–-:, ")
+        num = m.group(2).strip()
+        if len(re.sub(r"[^A-Za-z]", "", name_raw)) >= 4:
+            found.append(f"Job {num} - {name_raw.title()}")
+            _e_hits.add(num)
+
+    # Pattern C — generic parenthetical format "Some Name (Job 356)"
+    # Used as FALLBACK when Pattern E did not find a name for this job number.
+    # Non-greedy match keeps it short; leading articles stripped.
+    # Uses `joined` (line-continuation-fixed) text for the same multi-line benefit.
+    for m in re.finditer(
+        r"([A-Za-z][^\n\(\)]{4,80}?)\s*\(Job\s+(\d+)\)",
+        joined, re.I,
+    ):
+        name_raw = m.group(1).strip().rstrip("—–-:, ")
+        num = m.group(2).strip()
+        if num in _e_hits:
+            continue           # Pattern E already has a better name for this job
+        # Strip leading articles only (no hardcoded company/verb lists)
+        name_raw = re.sub(r"^(?:the\s+|a\s+|an\s+)", "", name_raw, flags=re.I).strip()
+        if len(re.sub(r"[^A-Za-z]", "", name_raw)) >= 4:
+            found.append(f"Job {num} - {name_raw.title()}")
+
+    # Pattern D — executive summary comma list "Jobs 314, 317, 338, 350, 351, and 356"
+    # Extracts job numbers only; names come from A/B/C matches or stay as "Job NNN"
+    for m in re.finditer(
+        r"Jobs?\s+((?:\d{3,4}(?:\s*,\s*|\s+and\s+))+\d{3,4})",
+        combined, re.I,
+    ):
+        nums = re.findall(r"\d{3,4}", m.group(1))
+        for num in nums:
+            found.append(f"__num_only_{num}__")
+
+    # Resolve Pattern D placeholders: if a named entry already exists for that
+    # job number, the placeholder is redundant and gets dropped. If no named
+    # entry exists, convert the placeholder to a bare "Job NNN" entry so the
+    # canonical filter at least knows that project exists in the document.
+    named = [f for f in found if not f.startswith("__num_only_")]
+    placeholders = [f for f in found if f.startswith("__num_only_")]
+    for ph in placeholders:
+        num = ph.replace("__num_only_", "").replace("__", "")
+        already_named = any(
+            bool(re.search(r"\bjob\s*" + re.escape(num) + r"\b", n, re.I))
+            for n in named
+        )
+        if not already_named:
+            named.append(f"Job {num}")
+
+    # Deduplicate — keep first occurrence of each unique project.
+    # Job Number is the authoritative dedup key: if BOTH entries have an
+    # explicit Job Number and those numbers are different, they are ALWAYS
+    # different projects — skip fuzzy similarity entirely to prevent
+    # geographically similar names (e.g. "West South Bay" vs "East South Bay")
+    # from being incorrectly merged.
     result: List[str] = []
-    for title in found:
+    for title in named:
         tk = _title_key(title)
-        # Prefer job-number exact match as dedup key
         jn = re.search(r"\bjob\s*(\d+)\b", title, re.I)
         already = False
         for r in result:
             rn = re.search(r"\bjob\s*(\d+)\b", r, re.I)
-            if jn and rn and jn.group(1) == rn.group(1):
-                already = True; break
+            if jn and rn:
+                if jn.group(1) == rn.group(1):
+                    already = True; break    # same Job Number → duplicate
+                else:
+                    continue                  # different Job Numbers → different project, skip fuzzy
+            # Fallback: fuzzy check only when one/both entries have no Job Number
             if SequenceMatcher(None, tk, _title_key(r)).ratio() >= 0.85:
                 already = True; break
         if not already:
             result.append(title)
     return result
+
+
+def _best_title(llm_title: str, canonical: str) -> str:
+    """Return the best project title.
+
+    The canonical is the authoritative title produced by the regex extractor
+    from structured parts of the document. It always wins UNLESS it is a bare
+    'Job NNN' placeholder (no name found at all), in which case the LLM title
+    is used if it carries the same Job Number.
+    """
+    lt = (llm_title or "").strip()
+    cn = (canonical or "").strip()
+
+    if not lt:
+        return cn
+
+    # Check if canonical is a bare "Job NNN" with no real project name
+    cn_is_bare = bool(re.fullmatch(r"Job\s+\d+", cn.strip(), re.I))
+
+    if cn_is_bare:
+        # No regex-extracted name exists — use LLM title if same Job Number
+        lt_jn = re.search(r"\bjob\s*(\d+)\b", lt, re.I)
+        cn_jn = re.search(r"\bjob\s*(\d+)\b", cn, re.I)
+        if lt_jn and cn_jn and lt_jn.group(1) == cn_jn.group(1):
+            return lt
+
+    # Canonical has a real name — it wins.
+    return cn
 
 
 def _filter_to_canonical(
@@ -453,7 +579,12 @@ def _filter_to_canonical(
             c, _ = _best_match(p.get("project_title", ""), doc_canon)
             if c:
                 p_copy = dict(p)
-                p_copy["project_title"] = c  # normalise to canonical name
+                # Use the RICHER of the canonical name and the LLM's title.
+                # Canonical guarantees the correct Job Number; LLM often has
+                # the fuller human-readable name. Pick whichever has more
+                # alphabetic content, unless the LLM title is a placeholder.
+                p_copy["project_title"] = _best_title(
+                    p_copy.get("project_title", ""), c)
                 kept.append(p_copy)
             # else: silent drop — false positive (phase name, sub-heading, etc.)
         else:
@@ -463,22 +594,21 @@ def _filter_to_canonical(
     # ------------------------------------------------------------------ #
     # Phase 2: cross-document deduplication                               #
     # ------------------------------------------------------------------ #
-    # Normalise all titles to canonical BEFORE merging so that LLM title
-    # variations ("Coyote Flood Management", "Job 314 Coyote Flood Mgmt",
-    # etc.) all become the same string and trivially merge by exact match.
+    # Normalise all titles to the best available canonical+LLM title
+    # BEFORE merging so that variations collapse into one record.
     for p in kept:
         c, _ = _best_match(p.get("project_title", ""), all_canonical)
         if c:
-            p["project_title"] = c
+            p["project_title"] = _best_title(p.get("project_title", ""), c)
 
-    # Now merge — projects with identical canonical titles collapse into one.
+    # Now merge — projects with identical (or near-identical) titles collapse.
     merged = merge_projects_by_title(kept, threshold=THRESHOLD)
 
-    # Re-apply canonical restore after merge in case _merge_into overwrote.
+    # Re-apply best-title selection after merge in case _merge_into overwrote.
     for p in merged:
         c, _ = _best_match(p.get("project_title", ""), all_canonical)
         if c:
-            p["project_title"] = c
+            p["project_title"] = _best_title(p.get("project_title", ""), c)
 
     # Sort: canonical projects first (in canonical order), then others.
     def _sort_key(p):

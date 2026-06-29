@@ -40,7 +40,7 @@ CACHE_DIR = os.environ.get("POC_CACHE", os.path.join(os.path.dirname(os.path.abs
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 MODEL = os.environ.get("PREFILL_MODEL", "gpt-4o-2024-08-06")
-PROMPT_VERSION = "v9"      # bump to invalidate LLM cache on prompt change
+PROMPT_VERSION = "v10"     # bump to invalidate LLM cache on prompt change
 SCHEMA_VERSION = "v2"      # bump to invalidate LLM cache on schema change
 
 # ---- Stage-9 field contract (mirrors the portal form) ----
@@ -131,23 +131,26 @@ SYSTEM_PROMPT = (
     "━━━ RULE 3 — DOCUMENT TYPES AND HOW TO READ THEM ━━━\n"
     "\n"
     "TYPE A — NARRATIVE STUDY REPORTS (Occams-style formal R&D tax credit studies):\n"
-    "Each project's section follows this structure:\n"
-    "  i)   Basic data  ← THE ONLY VALID PROJECT BOUNDARY MARKER\n"
-    "                     Contains: Project Name, Project Years, Man hours, Contract Type, Employees\n"
-    "  ii)  Project Description\n"
-    "  iii) Why This is a New or Improved Business Component\n"
-    "  iv)  Elimination of Uncertainty\n"
-    "  v)   Process of Experimentation\n"
-    "  vi)  Why Technological in Nature\n"
+    "These studies may use TWO different section formats — handle both:\n"
+    "\n"
+    "FORMAT A1 (older single-year studies):\n"
+    "  i)   Basic data  ← PROJECT BOUNDARY — contains 'Project Name:', man hours, etc.\n"
+    "  ii–vi) Analysis sections — sub-headings here are NOT separate projects\n"
+    "\n"
+    "FORMAT A2 (newer multi-year studies):\n"
+    "  Project sections are numbered: 'Project 1:', 'Project 2:', etc.\n"
+    "  The Job Number appears in PARENTHESES after the project name:\n"
+    "    e.g. 'Project 3: Coyote Flood Management (Job 314)'\n"
+    "    e.g. 'the Hudeman Slough Boat Ramp ecological restoration (Job 338)'\n"
+    "  ALWAYS extract the Job Number from '(Job NNN)' and use it in the project title.\n"
+    "  Canonical title format: 'Job NNN - Project Name'\n"
     "\n"
     "HARD RULE FOR OCCAMS STUDY REPORTS:\n"
-    "A new project begins ONLY when you see a section labeled 'i) Basic data' containing "
-    "'Project Name:'. This is the ONLY valid project boundary. Sections ii through vi and "
-    "ALL their sub-headings belong to the most recently declared project in section i.\n"
-    "Numbered items like '1) Custom 3D-Fit ADA Handrail System for Steep Terrain Pathway' "
-    "or '1) Innovative Solutions for Flood Wall Construction' that appear inside sections "
-    "iii, iv, v, or vi are the NAMES OF BUSINESS COMPONENTS BEING ANALYZED — they are "
-    "NOT new projects. Extract their content as part of the parent project's fields.\n"
+    "A new project begins at 'i) Basic data' (Format A1) OR at a numbered project "
+    "header with '(Job NNN)' (Format A2). Sub-headings within project analysis sections "
+    "are NOT separate projects — they are analytical dimensions of the parent project.\n"
+    "Numbered items like '1) Custom 3D-Fit ADA Handrail System' inside sections iii–vi "
+    "are business component names being analyzed, NOT new project records.\n"
     "\n"
     "CRITICAL — WHEN YOUR TEXT HAS NO 'i) Basic data' SECTION:\n"
     "If the text you receive starts with a '=== DOCUMENT CONTEXT ===' header and the body "
