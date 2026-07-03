@@ -413,28 +413,12 @@ function projectCard(data){
 
       <label class="fld">Industry &amp; Science Disciplines</label>
       <div class="ind-section">
-        <!-- Industry select -->
         <div class="ind-select-row">
           <select class="txt ${data.industry_key&&data.industry_key!=='fallback_general'?fill:''}"
-                  id="${id}-indSelect"
-                  onchange="onIndustryChange('${id}',this.value)">
+                  id="${id}-indSelect">
             ${ALL_INDUSTRIES.map(i=>`<option value="${i.key}" ${(data.industry_key||'fallback_general')===i.key?'selected':''}>${esc(i.label)}</option>`).join('')}
           </select>
           ${ai&&data.industry_key&&data.industry_key!=='fallback_general'?'<span class="ind-ai-badge">✦ AI detected</span>':''}
-        </div>
-        <!-- Selected discipline chips -->
-        <div class="disc-chips" id="${id}-chips">
-          ${(data.disciplines||[]).filter(d=>d.auto_checked).map(d=>chipHtml(id,d.id,d.label)).join('')}
-        </div>
-        <!-- Add discipline dropdown -->
-        <div class="disc-add-wrap" id="${id}-addWrap">
-          <button class="disc-add-trigger" onclick="toggleDiscDrop('${id}')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
-            Add discipline
-          </button>
-          <div class="disc-dropdown" id="${id}-discDrop">
-            ${buildDiscDropdown(id, data.disciplines||[], data.industry_key||'fallback_general')}
-          </div>
         </div>
       </div>
 
@@ -639,10 +623,12 @@ function mapApiProject(p){
     alternatives: p.solutions_alternatives_considered,
     uncertainty: p.technical_challenges_uncertainties,
     confidence: p.confidence,
-    // Industry & discipline fields from backend
-    industry_key:   p._industry        || 'fallback_general',
-    industry_label: p._industry_label  || 'Other / General',
-    disciplines:    p._disciplines     || [],
+    // Industry field — fall back to 'fallback_general' if not in known list
+    industry_key: (()=>{
+      const k = p._industry || 'fallback_general';
+      return ALL_INDUSTRIES.some(i=>i.key===k) ? k : 'fallback_general';
+    })(),
+    industry_label: p._industry_label || 'Other / General',
   };
 }
 
