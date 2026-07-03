@@ -79,7 +79,7 @@
   .footer-actions{display:flex;justify-content:space-between;margin-top:22px}
 
   /* project card */
-  .proj{border:1px solid var(--line);border-radius:12px;margin-top:18px;overflow:hidden;background:#fcfcfd}
+  .proj{border:1px solid var(--line);border-radius:12px;margin-top:18px;background:#fcfcfd}
   .proj-head{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;cursor:pointer}
   .proj-head .ttl{font-weight:700;font-size:16px;display:flex;align-items:center;gap:10px}
   .proj-body{padding:4px 20px 20px}
@@ -108,6 +108,42 @@
 
   .contracts-box{border:1px dashed #cfd4db;border-radius:10px;padding:18px;text-align:center;color:var(--muted);margin-top:8px}
   .delete-proj{display:flex;justify-content:center;margin-top:18px}
+
+  /* ── Industry & Disciplines redesign ─────────────────────────────────── */
+  .ind-section{margin-top:4px}
+  /* Industry select row */
+  .ind-select-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .ind-select-row select.txt{max-width:280px;font-weight:600}
+  .ind-ai-badge{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;
+                background:var(--orange-tint);color:#7a3319;border-radius:999px;padding:3px 10px;white-space:nowrap}
+  /* Selected chips row */
+  .disc-chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;min-height:32px;
+              align-items:center}
+  .disc-chip{display:inline-flex;align-items:center;gap:6px;background:var(--orange);color:#fff;
+             border-radius:999px;padding:6px 12px;font-size:13px;font-weight:600}
+  .disc-chip button{background:none;border:none;color:rgba(255,255,255,.85);font-size:16px;
+                    line-height:1;cursor:pointer;padding:0;display:flex;align-items:center}
+  .disc-chip button:hover{color:#fff}
+  /* Add disciplines dropdown */
+  .disc-add-wrap{position:relative;display:inline-block;margin-top:2px}
+  .disc-add-trigger{display:inline-flex;align-items:center;gap:6px;border:1.5px solid var(--line);
+                    border-radius:9px;padding:7px 13px;font-size:13.5px;font-weight:600;
+                    color:var(--muted);background:#fff;cursor:pointer}
+  .disc-add-trigger:hover{border-color:var(--orange);color:var(--orange)}
+  .disc-add-trigger svg{width:14px;height:14px}
+  .disc-dropdown{position:absolute;top:calc(100% + 6px);left:0;background:#fff;border:1px solid var(--line);
+                 border-radius:12px;box-shadow:0 8px 28px rgba(0,0,0,.15);z-index:200;
+                 min-width:260px;max-height:260px;overflow-y:auto;padding:6px 0;display:none}
+  .disc-dropdown.open{display:block}
+  .proj-body{overflow:visible}
+  .disc-dropdown-item{display:flex;align-items:center;gap:10px;padding:10px 16px;
+                       font-size:13.5px;cursor:pointer;color:var(--ink);user-select:none}
+  .disc-dropdown-item:hover{background:var(--orange-tint)}
+  .disc-dropdown-item.selected{color:var(--orange-dark);font-weight:600}
+  .disc-dropdown-item .chk{width:17px;height:17px;border-radius:5px;border:2px solid #cfd4db;
+                            display:grid;place-items:center;flex-shrink:0}
+  .disc-dropdown-item.selected .chk{background:var(--orange);border-color:var(--orange);color:#fff}
+  .disc-dropdown-divider{border:none;border-top:1px solid var(--line);margin:4px 0}
   .delete-proj button{background:none;border:none;color:var(--orange);font-weight:600;display:flex;gap:7px;align-items:center}
 
   /* AI badge + confidence */
@@ -375,8 +411,32 @@ function projectCard(data){
       <textarea class="txt ${data.uncertainty?fill:''}" maxlength="1000" placeholder="Describe the technical challenges and uncertainties...." oninput="count(this)">${esc(data.uncertainty)}</textarea>
       <div class="counter">${(data.uncertainty||'').length}/1000 characters</div>
 
-      <label class="fld">Contracts</label>
-      <div class="contracts-box">No contracts are attached</div>
+      <label class="fld">Industry &amp; Science Disciplines</label>
+      <div class="ind-section">
+        <!-- Industry select -->
+        <div class="ind-select-row">
+          <select class="txt ${data.industry_key&&data.industry_key!=='fallback_general'?fill:''}"
+                  id="${id}-indSelect"
+                  onchange="onIndustryChange('${id}',this.value)">
+            ${ALL_INDUSTRIES.map(i=>`<option value="${i.key}" ${(data.industry_key||'fallback_general')===i.key?'selected':''}>${esc(i.label)}</option>`).join('')}
+          </select>
+          ${ai&&data.industry_key&&data.industry_key!=='fallback_general'?'<span class="ind-ai-badge">✦ AI detected</span>':''}
+        </div>
+        <!-- Selected discipline chips -->
+        <div class="disc-chips" id="${id}-chips">
+          ${(data.disciplines||[]).filter(d=>d.auto_checked).map(d=>chipHtml(id,d.id,d.label)).join('')}
+        </div>
+        <!-- Add discipline dropdown -->
+        <div class="disc-add-wrap" id="${id}-addWrap">
+          <button class="disc-add-trigger" onclick="toggleDiscDrop('${id}')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+            Add discipline
+          </button>
+          <div class="disc-dropdown" id="${id}-discDrop">
+            ${buildDiscDropdown(id, data.disciplines||[], data.industry_key||'fallback_general')}
+          </div>
+        </div>
+      </div>
 
       <div class="delete-proj">
         <button onclick="deleteProj('${id}')">
@@ -401,6 +461,95 @@ function toggleProj(id){document.getElementById(id).classList.toggle('collapsed'
 function pickToggle(btn){[...btn.parentElement.children].forEach(b=>b.classList.remove('sel'));btn.classList.add('sel');}
 function syncTitle(id,v){const span=document.querySelector('#'+id+' .ttl span');const n=span.textContent.split('.')[0];span.textContent=n+'. '+(v||'Untitled Project');}
 function deleteProj(id){document.getElementById(id).remove();if(!projectsEl.children.length){emptyState.style.display='';addMoreRow.style.display='none';}}
+
+/* ── Industry & Discipline helpers ──────────────────────────────────── */
+
+// Disciplines per industry key — built from ALL_INDUSTRIES + the backend data
+// stored on the card element itself.
+function chipHtml(projId, discId, label){
+  return `<span class="disc-chip" data-proj="${projId}" data-disc="${discId}">
+    ${esc(label)}
+    <button onclick="removeChip('${projId}','${discId}')" title="Remove">&times;</button>
+  </span>`;
+}
+
+function buildDiscDropdown(projId, disciplines, industryKey){
+  // Show all disciplines for the industry; check those already selected
+  if(!disciplines || !disciplines.length) return '<div style="padding:12px 16px;color:#9aa1ad;font-size:13px">No disciplines available</div>';
+  return disciplines.map(d=>{
+    const sel = d.auto_checked;
+    return `<div class="disc-dropdown-item ${sel?'selected':''}"
+      data-disc="${d.id}" data-label="${esc(d.label)}" data-proj="${projId}"
+      onclick="toggleDiscItem(this)">
+      <span class="chk">${sel?'<svg width="10" height="10" viewBox="0 0 12 10" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="1,5 4.5,8.5 11,1"/></svg>':''}</span>
+      ${esc(d.label)}
+    </div>`;
+  }).join('');
+}
+
+function toggleDiscItem(el){
+  const projId = el.dataset.proj;
+  const discId = el.dataset.disc;
+  const label  = el.dataset.label;
+  const isSel  = el.classList.contains('selected');
+
+  if(isSel){
+    // Deselect — remove chip
+    el.classList.remove('selected');
+    el.querySelector('.chk').innerHTML = '';
+    removeChip(projId, discId);
+  } else {
+    // Select — add chip
+    el.classList.add('selected');
+    el.querySelector('.chk').innerHTML = '<svg width="10" height="10" viewBox="0 0 12 10" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="1,5 4.5,8.5 11,1"/></svg>';
+    addChip(projId, discId, label);
+  }
+}
+
+function addChip(projId, discId, label){
+  const chips = document.getElementById(projId+'-chips');
+  if(chips.querySelector(`[data-disc="${discId}"]`)) return; // already there
+  chips.insertAdjacentHTML('beforeend', chipHtml(projId, discId, label));
+}
+
+function removeChip(projId, discId){
+  const chips = document.getElementById(projId+'-chips');
+  const chip  = chips.querySelector(`[data-disc="${discId}"]`);
+  if(chip) chip.remove();
+  // Also uncheck in dropdown
+  const drop = document.getElementById(projId+'-discDrop');
+  if(drop){
+    const item = drop.querySelector(`[data-disc="${discId}"]`);
+    if(item){ item.classList.remove('selected'); item.querySelector('.chk').innerHTML=''; }
+  }
+}
+
+function toggleDiscDrop(projId){
+  const drop = document.getElementById(projId+'-discDrop');
+  const isOpen = drop.classList.contains('open');
+  // Close all other open dropdowns first
+  document.querySelectorAll('.disc-dropdown.open').forEach(d=>d.classList.remove('open'));
+  if(!isOpen){
+    drop.classList.add('open');
+    setTimeout(()=>document.addEventListener('click', function h(e){
+      if(!drop.parentElement.contains(e.target)){
+        drop.classList.remove('open');
+        document.removeEventListener('click',h);
+      }
+    }),0);
+  }
+}
+
+function onIndustryChange(projId, industryKey){
+  // When industry changes, rebuild the discipline dropdown
+  // (chips stay — user keeps their manual selections)
+  const drop = document.getElementById(projId+'-discDrop');
+  const currentChips = [...document.getElementById(projId+'-chips')
+    .querySelectorAll('.disc-chip')].map(c=>c.dataset.disc);
+  // Use fallback disciplines since we don't have a live map in the browser
+  // Just clear dropdown content with a message
+  drop.innerHTML = '<div style="padding:12px 16px;color:#9aa1ad;font-size:13px">Select disciplines below or type to add</div>';
+}
 
 function addProject(data){
   emptyState.style.display='none';
@@ -460,6 +609,20 @@ function updateYearLabel(projects){
   }
 }
 
+// Full list of industries for the change-industry dropdown.
+const ALL_INDUSTRIES = [
+  {key:"saas_software",            label:"SaaS / Software"},
+  {key:"manufacturing",            label:"Manufacturing"},
+  {key:"life_science",             label:"Life Science / Pharma"},
+  {key:"aerospace",                label:"Aerospace"},
+  {key:"architecture_construction",label:"Architecture / Construction"},
+  {key:"food_beverage",            label:"Food and Beverage"},
+  {key:"energy_cleantech",         label:"Energy / Cleantech"},
+  {key:"medical_device",           label:"Medical Device"},
+  {key:"agriculture_agtech",       label:"Agriculture / AgTech"},
+  {key:"fallback_general",         label:"Other / General"},
+];
+
 // Map a backend project record -> the card's data shape.
 function mapApiProject(p){
   return {
@@ -475,7 +638,11 @@ function mapApiProject(p){
     supplies: p.supplies_used,
     alternatives: p.solutions_alternatives_considered,
     uncertainty: p.technical_challenges_uncertainties,
-    confidence: p.confidence
+    confidence: p.confidence,
+    // Industry & discipline fields from backend
+    industry_key:   p._industry        || 'fallback_general',
+    industry_label: p._industry_label  || 'Other / General',
+    disciplines:    p._disciplines     || [],
   };
 }
 

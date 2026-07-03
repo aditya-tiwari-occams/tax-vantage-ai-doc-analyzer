@@ -862,6 +862,25 @@ async def run_batch(paths: List[str], concurrency: int = MAX_CONCURRENCY,
                        + ", ".join(docs_without))
         projects = _filter_to_canonical(projects, doc_canonicals, all_canonical)
 
+    # Stage 4c: industry + science-discipline detection (pure keyword scan,
+    # no LLM calls). Attaches _industry, _industry_label, _disciplines to each
+    # project using the combined text from all source documents.
+    try:
+        from industry import enrich_project
+        # Build a combined text corpus from all extracted documents for scanning
+        all_text = "\n\n".join(text for _, text, _ in extracted)
+        for p in projects:
+            enrich_project(p, all_text)
+        if lg:
+            for p in projects:
+                lg.log(f"    Industry [{p.get('project_title','?')[:40]}]: "
+                       f"{p.get('_industry_label','?')} — "
+                       f"{sum(1 for d in p.get('_disciplines',[]) if d.get('auto_checked'))} "
+                       f"discipline(s) auto-checked")
+    except Exception as _e:
+        if lg:
+            lg.log(f"  ⚠ Industry detection skipped: {_e}")
+
     needs_review = sum(1 for p in projects if p.get("_needs_review"))
     strategies = {}
     for s in sections:

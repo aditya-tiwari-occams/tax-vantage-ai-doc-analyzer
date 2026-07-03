@@ -1,0 +1,683 @@
+{
+  "_meta": {
+    "version": "1.0.0",
+    "description": "Industry-to-science-discipline keyword mapping for TaxVantage Stage 9 AI classification. Agent scans uploaded project documents, matches keywords against each discipline's keyword_clusters, and auto-checks disciplines that meet the match_threshold.",
+    "usage": "For each project's uploaded files, run keyword frequency scan per discipline. If matched_keywords >= match_threshold, mark discipline as auto_checked: true. Present all disciplines for the client's industry with auto_checked state pre-selected. Client can add or remove.",
+    "match_threshold_default": 2,
+    "match_logic": "Case-insensitive. Match on whole word or compound phrase. Count unique keyword hits, not total occurrences. If any single keyword from a cluster appears 2+ times across all project documents, that keyword counts as one hit."
+  },
+
+  "industries": {
+
+    "saas_software": {
+      "label": "SaaS / Software",
+      "stage1_values": ["saas", "software", "technology", "tech", "platform", "app", "application", "cloud software", "b2b software", "enterprise software"],
+      "disciplines": [
+        {
+          "id": "computer_science",
+          "label": "Computer Science",
+          "default_checked": true,
+          "match_threshold": 1,
+          "keyword_clusters": [
+            "software architecture", "system design", "codebase", "compiler", "runtime",
+            "operating system", "kernel", "memory management", "concurrency", "thread",
+            "process", "binary", "executable", "bytecode", "interpreter", "virtual machine",
+            "programming language", "type system", "garbage collection", "stack overflow",
+            "pointer", "recursion", "object oriented", "functional programming"
+          ]
+        },
+        {
+          "id": "machine_learning",
+          "label": "Machine Learning",
+          "default_checked": false,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "machine learning", "ml model", "neural network", "deep learning", "training data",
+            "model training", "inference", "prediction", "classification", "regression",
+            "transformer", "bert", "gpt", "llm", "large language model", "embedding",
+            "fine-tuning", "feature engineering", "overfitting", "underfitting", "gradient descent",
+            "backpropagation", "epoch", "batch size", "learning rate", "loss function",
+            "accuracy", "precision", "recall", "f1 score", "confusion matrix",
+            "random forest", "xgboost", "support vector machine", "svm", "logistic regression",
+            "convolutional neural network", "cnn", "recurrent neural network", "rnn", "lstm",
+            "attention mechanism", "self-attention", "encoder", "decoder", "tokenizer",
+            "vector database", "semantic search", "rag", "retrieval augmented"
+          ]
+        },
+        {
+          "id": "algorithms",
+          "label": "Algorithms and Data Structures",
+          "default_checked": false,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "algorithm", "algorithmic", "time complexity", "space complexity", "big o",
+            "sorting", "searching", "graph traversal", "dynamic programming", "greedy algorithm",
+            "divide and conquer", "hash table", "hash map", "binary tree", "b-tree",
+            "linked list", "queue", "stack", "heap", "priority queue", "trie",
+            "pathfinding", "dijkstra", "a star", "breadth first", "depth first",
+            "optimization", "heuristic", "approximation algorithm", "np-hard", "np-complete",
+            "computational complexity", "polynomial time", "exponential time"
+          ]
+        },
+        {
+          "id": "distributed_systems",
+          "label": "Distributed Systems",
+          "default_checked": false,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "distributed", "microservices", "service mesh", "api gateway", "load balancer",
+            "horizontal scaling", "vertical scaling", "auto-scaling", "kubernetes", "k8s",
+            "docker", "container", "orchestration", "service discovery", "circuit breaker",
+            "eventual consistency", "cap theorem", "consensus", "raft", "paxos",
+            "message queue", "kafka", "rabbitmq", "pubsub", "event streaming", "event driven",
+            "cqrs", "event sourcing", "saga pattern", "idempotent", "distributed transaction",
+            "replication", "sharding", "partitioning", "leader election", "fault tolerance",
+            "high availability", "uptime", "99.9", "sla", "latency", "throughput", "p99",
+            "grpc", "rest api", "graphql", "websocket", "cdn", "edge computing"
+          ]
+        },
+        {
+          "id": "data_engineering",
+          "label": "Data Engineering",
+          "default_checked": false,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "data pipeline", "etl", "elt", "data warehouse", "data lake", "data lakehouse",
+            "spark", "hadoop", "flink", "airflow", "dbt", "snowflake", "bigquery", "redshift",
+            "schema", "data model", "olap", "oltp", "columnar storage", "parquet", "avro",
+            "streaming data", "batch processing", "real-time processing", "ingestion",
+            "data quality", "data lineage", "data catalog", "metadata", "feature store",
+            "vector store", "time series", "anomaly detection", "outlier detection",
+            "data transformation", "normalization", "denormalization", "aggregation"
+          ]
+        },
+        {
+          "id": "cybersecurity",
+          "label": "Cybersecurity",
+          "default_checked": false,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "security", "encryption", "cryptography", "ssl", "tls", "certificate",
+            "authentication", "authorization", "oauth", "jwt", "sso", "mfa", "two-factor",
+            "penetration testing", "vulnerability", "exploit", "threat model", "attack vector",
+            "zero trust", "firewall", "intrusion detection", "siem", "soc", "incident response",
+            "compliance", "gdpr", "hipaa", "soc2", "iso 27001", "data privacy",
+            "key management", "hsm", "end-to-end encryption", "zero knowledge"
+          ]
+        },
+        {
+          "id": "computer_vision",
+          "label": "Computer Vision",
+          "default_checked": false,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "computer vision", "image recognition", "object detection", "image segmentation",
+            "yolo", "resnet", "vgg", "inception", "convolutional", "feature extraction",
+            "bounding box", "annotation", "labeling", "optical character recognition", "ocr",
+            "face recognition", "pose estimation", "depth estimation", "lidar", "point cloud",
+            "image classification", "image generation", "diffusion model", "gan",
+            "generative adversarial", "stable diffusion", "image preprocessing", "augmentation"
+          ]
+        }
+      ]
+    },
+
+    "manufacturing": {
+      "label": "Manufacturing",
+      "stage1_values": ["manufacturing", "industrial", "production", "factory", "fabrication", "assembly", "contract manufacturing", "oem"],
+      "disciplines": [
+        {
+          "id": "mechanical_engineering",
+          "label": "Mechanical Engineering",
+          "default_checked": true,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "mechanical", "mechanism", "machine design", "stress analysis", "strain",
+            "fatigue", "fracture", "yield strength", "tensile strength", "compressive strength",
+            "torque", "shear", "bending moment", "deflection", "vibration", "modal analysis",
+            "finite element", "fea", "ansys", "solidworks", "cad", "cam", "cnc",
+            "tolerance", "fit", "assembly", "fastener", "bearing", "gear", "shaft",
+            "actuator", "servo", "pneumatic", "hydraulic", "spring", "damper"
+          ]
+        },
+        {
+          "id": "materials_science",
+          "label": "Materials Science",
+          "default_checked": false,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "material", "alloy", "composite", "polymer", "ceramic", "metal", "steel",
+            "aluminum", "titanium", "carbon fiber", "fiberglass", "epoxy resin",
+            "microstructure", "grain boundary", "crystal structure", "phase diagram",
+            "heat treatment", "annealing", "quenching", "tempering", "hardening",
+            "corrosion", "oxidation", "coating", "surface treatment", "plating",
+            "tensile test", "hardness", "ductility", "brittleness", "toughness",
+            "creep", "thermal expansion", "conductivity", "permeability", "porosity",
+            "additive manufacturing", "3d printing", "sintering", "powder metallurgy"
+          ]
+        },
+        {
+          "id": "thermodynamics",
+          "label": "Thermodynamics and Heat Transfer",
+          "default_checked": false,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "thermodynamic", "heat transfer", "thermal", "temperature", "heat flux",
+            "conduction", "convection", "radiation", "thermal resistance", "insulation",
+            "enthalpy", "entropy", "carnot", "efficiency", "heat exchanger",
+            "cooling system", "hvac", "refrigeration", "heat pump", "boiler",
+            "combustion", "flame temperature", "thermal management", "thermal runaway",
+            "phase change", "melting point", "boiling point", "latent heat", "specific heat"
+          ]
+        },
+        {
+          "id": "manufacturing_process",
+          "label": "Manufacturing Process Engineering",
+          "default_checked": false,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "process engineering", "process optimization", "yield", "throughput", "cycle time",
+            "machining", "milling", "turning", "grinding", "drilling", "welding", "soldering",
+            "casting", "forging", "stamping", "injection molding", "extrusion", "rolling",
+            "lean manufacturing", "six sigma", "kaizen", "spc", "statistical process control",
+            "quality control", "inspection", "tolerance", "defect rate", "scrap rate",
+            "jig", "fixture", "tooling", "die", "mold", "press", "automation", "robot"
+          ]
+        },
+        {
+          "id": "chemistry_industrial",
+          "label": "Industrial Chemistry",
+          "default_checked": false,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "chemical", "chemistry", "reaction", "catalyst", "reagent", "solvent",
+            "compound", "molecule", "polymer", "adhesive", "lubricant", "coolant",
+            "chemical process", "batch reaction", "continuous flow", "distillation",
+            "filtration", "separation", "purification", "concentration", "ph",
+            "acid", "base", "oxidation", "reduction", "synthesis", "formulation"
+          ]
+        },
+        {
+          "id": "metallurgy",
+          "label": "Metallurgy",
+          "default_checked": false,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "metallurgy", "metallurgical", "ferrous", "non-ferrous", "casting", "smelting",
+            "alloying", "grain size", "grain structure", "precipitate", "martensite",
+            "austenite", "ferrite", "pearlite", "bainite", "tempered", "normalized",
+            "weld", "weld pool", "heat affected zone", "haz", "electron beam welding",
+            "laser welding", "friction stir welding", "arc welding", "tig", "mig",
+            "hardness testing", "rockwell", "vickers", "brinell", "charpy impact"
+          ]
+        }
+      ]
+    },
+
+    "life_science": {
+      "label": "Life Science / Pharma",
+      "stage1_values": ["life science", "pharmaceutical", "pharma", "biotech", "biotechnology", "medical device", "diagnostics", "therapeutics", "drug development", "clinical"],
+      "disciplines": [
+        {
+          "id": "biology",
+          "label": "Biology",
+          "default_checked": true,
+          "match_threshold": 1,
+          "keyword_clusters": [
+            "biology", "biological", "cell", "cellular", "organism", "tissue", "organ",
+            "protein", "enzyme", "receptor", "pathway", "signaling", "gene expression",
+            "cell culture", "in vitro", "in vivo", "assay", "proliferation", "apoptosis",
+            "differentiation", "stem cell", "microbiome", "bacteria", "virus", "pathogen",
+            "immune response", "antibody", "antigen", "cytokine", "inflammation"
+          ]
+        },
+        {
+          "id": "biochemistry",
+          "label": "Biochemistry",
+          "default_checked": false,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "biochemistry", "biochemical", "binding affinity", "kinetics", "kinase",
+            "substrate", "inhibitor", "agonist", "antagonist", "ligand", "ic50", "ec50",
+            "metabolite", "metabolomics", "proteomics", "enzyme activity", "catalysis",
+            "atp", "nadh", "coenzyme", "cofactor", "reaction mechanism", "active site",
+            "allosteric", "competitive inhibition", "non-competitive", "km", "vmax",
+            "western blot", "elisa", "mass spectrometry", "nmr", "chromatography", "hplc"
+          ]
+        },
+        {
+          "id": "genomics",
+          "label": "Genomics and Molecular Biology",
+          "default_checked": false,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "genomics", "genome", "dna", "rna", "mrna", "gene", "genetic", "mutation",
+            "snp", "variant", "sequencing", "ngs", "next generation sequencing", "pcr",
+            "crispr", "gene editing", "gene therapy", "transcription", "translation",
+            "plasmid", "vector", "transfection", "knockout", "knockin", "overexpression",
+            "rna-seq", "single cell", "microarray", "epigenetics", "methylation",
+            "histone", "chromatin", "promoter", "enhancer", "codon", "amino acid"
+          ]
+        },
+        {
+          "id": "pharmacology",
+          "label": "Pharmacology",
+          "default_checked": false,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "pharmacology", "pharmacokinetic", "pk", "pharmacodynamic", "pd", "adme",
+            "absorption", "distribution", "metabolism", "excretion", "bioavailability",
+            "half-life", "clearance", "volume of distribution", "drug interaction",
+            "dose response", "therapeutic window", "toxicity", "ld50", "moa",
+            "mechanism of action", "formulation", "drug delivery", "nanoparticle",
+            "liposome", "excipient", "bioequivalence", "clinical trial", "phase 1", "phase 2",
+            "fda", "inda", "nda", "gmp", "good manufacturing practice", "regulatory submission"
+          ]
+        },
+        {
+          "id": "clinical_research",
+          "label": "Clinical Research",
+          "default_checked": false,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "clinical", "clinical trial", "clinical study", "protocol", "cohort",
+            "randomized", "placebo", "double blind", "control group", "endpoint",
+            "primary endpoint", "secondary endpoint", "adverse event", "safety",
+            "efficacy", "patient", "subject", "enrollment", "informed consent", "irb",
+            "institutional review board", "ethics", "gcp", "good clinical practice",
+            "site", "investigator", "cro", "contract research", "data monitoring"
+          ]
+        },
+        {
+          "id": "immunology",
+          "label": "Immunology",
+          "default_checked": false,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "immunology", "immune", "immunotherapy", "checkpoint", "pd-l1", "pd-1",
+            "car-t", "t cell", "b cell", "nk cell", "dendritic cell", "macrophage",
+            "mhc", "hla", "immunogenicity", "tolerance", "autoimmune", "allergy",
+            "complement", "innate immunity", "adaptive immunity", "vaccine", "adjuvant",
+            "monoclonal antibody", "mab", "bispecific", "antibody engineering", "fc region"
+          ]
+        }
+      ]
+    },
+
+    "aerospace": {
+      "label": "Aerospace",
+      "stage1_values": ["aerospace", "aviation", "defense", "defence", "space", "satellite", "drone", "uav", "unmanned"],
+      "disciplines": [
+        {
+          "id": "fluid_dynamics",
+          "label": "Fluid Dynamics and Aerodynamics",
+          "default_checked": true,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "aerodynamic", "fluid dynamics", "cfd", "computational fluid", "reynolds number",
+            "mach number", "subsonic", "supersonic", "hypersonic", "turbulent", "laminar",
+            "boundary layer", "drag", "lift", "thrust", "wake", "vortex", "shock wave",
+            "pressure coefficient", "flow separation", "stall", "flutter", "aeroelastic",
+            "wind tunnel", "navier stokes", "finite volume", "ansys fluent", "openfoam",
+            "airfoil", "wing", "fuselage", "nacelle", "inlet", "nozzle", "diffuser"
+          ]
+        },
+        {
+          "id": "propulsion",
+          "label": "Propulsion",
+          "default_checked": false,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "propulsion", "engine", "turbine", "compressor", "combustion chamber",
+            "thrust", "specific impulse", "isp", "exhaust velocity", "nozzle",
+            "jet engine", "turbofan", "turbojet", "turboprop", "ramjet", "scramjet",
+            "rocket", "propellant", "oxidizer", "fuel", "bipropellant", "monopropellant",
+            "electric propulsion", "ion thruster", "hall effect", "cold gas thruster",
+            "gimbal", "throttle", "combustion stability", "instability", "ignition"
+          ]
+        },
+        {
+          "id": "control_systems",
+          "label": "Control Systems and Avionics",
+          "default_checked": false,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "control system", "control law", "flight control", "autopilot", "guidance",
+            "navigation", "gnss", "gps", "imu", "inertial", "kalman filter", "pid",
+            "pid controller", "state space", "transfer function", "bode plot", "nyquist",
+            "stability margin", "gain margin", "phase margin", "feedback loop",
+            "avionics", "fly by wire", "actuation", "sensor fusion", "attitude control",
+            "trajectory", "orbital mechanics", "attitude determination", "reaction wheel",
+            "gyroscope", "accelerometer", "magnetometer", "star tracker"
+          ]
+        },
+        {
+          "id": "structures_aerospace",
+          "label": "Structural Engineering",
+          "default_checked": false,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "structural", "stress", "strain", "fatigue", "fracture mechanics",
+            "crack growth", "damage tolerance", "fail safe", "safe life",
+            "composite structure", "sandwich panel", "stiffener", "rib", "spar",
+            "fuselage frame", "bulkhead", "load path", "buckling", "instability",
+            "vibration", "modal", "flutter analysis", "thermal stress", "creep",
+            "certification", "do-160", "mil-spec", "faa", "easa", "airworthiness"
+          ]
+        },
+        {
+          "id": "materials_aerospace",
+          "label": "Advanced Materials",
+          "default_checked": false,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "carbon fiber", "cfrp", "composite", "titanium", "aluminum alloy",
+            "superalloy", "nickel alloy", "inconel", "ceramic matrix composite", "cmc",
+            "thermal protection", "ablative", "coating", "pvd", "cvd", "anodizing",
+            "honeycomb", "foam core", "sandwich", "prepreg", "layup", "autoclave",
+            "out of autoclave", "resin transfer molding", "rtm", "vacuum infusion",
+            "mechanical testing", "coupon", "qualification", "material allowable"
+          ]
+        }
+      ]
+    },
+
+    "architecture_construction": {
+      "label": "Architecture / Construction",
+      "stage1_values": ["architecture", "construction", "engineering", "civil", "structural", "building", "infrastructure", "contractor", "aea"],
+      "disciplines": [
+        {
+          "id": "structural_engineering",
+          "label": "Structural Engineering",
+          "default_checked": true,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "structural", "load bearing", "foundation", "beam", "column", "slab",
+            "shear wall", "moment frame", "truss", "lateral load", "seismic",
+            "wind load", "dead load", "live load", "deflection", "settlement",
+            "pile", "footing", "retaining wall", "soil pressure", "bearing capacity",
+            "reinforced concrete", "prestressed", "post-tension", "steel connection",
+            "weld", "bolt", "code", "aisc", "aci", "asce", "ibc", "fema"
+          ]
+        },
+        {
+          "id": "civil_engineering",
+          "label": "Civil Engineering",
+          "default_checked": false,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "civil", "site", "grading", "drainage", "stormwater", "utility",
+            "roadway", "pavement", "traffic", "bridge", "culvert", "retaining",
+            "geotechnical", "soil", "compaction", "permeability", "groundwater",
+            "surveying", "gps survey", "topography", "easement", "right of way",
+            "permit", "zoning", "entitlement", "environmental", "wetland", "epa"
+          ]
+        },
+        {
+          "id": "building_physics",
+          "label": "Building Physics and Energy",
+          "default_checked": false,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "energy model", "energy simulation", "eui", "ashrae", "leed", "passive house",
+            "thermal envelope", "insulation", "r-value", "u-value", "thermal bridging",
+            "air barrier", "vapor barrier", "moisture", "condensation", "dew point",
+            "daylighting", "solar", "shading", "glare", "infiltration", "hvac",
+            "mechanical system", "ventilation", "heat recovery", "vrf", "radiant",
+            "renewable energy", "solar panel", "pv", "battery storage", "net zero"
+          ]
+        },
+        {
+          "id": "construction_technology",
+          "label": "Construction Technology",
+          "default_checked": false,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "bim", "building information modeling", "revit", "navisworks", "clash detection",
+            "prefabrication", "modular", "offsite", "panelization", "mass timber", "clt",
+            "concrete formwork", "slip form", "tilt-up", "precast", "post-tension",
+            "drone survey", "laser scan", "point cloud", "digital twin", "augmented reality",
+            "construction sequencing", "schedule", "critical path", "lean construction",
+            "integrated project delivery", "ipd", "design build", "gmp"
+          ]
+        }
+      ]
+    },
+
+    "food_beverage": {
+      "label": "Food and Beverage",
+      "stage1_values": ["food", "beverage", "brewery", "brewing", "distillery", "winery", "food manufacturing", "food production", "cpg"],
+      "disciplines": [
+        {
+          "id": "food_science",
+          "label": "Food Science",
+          "default_checked": true,
+          "match_threshold": 1,
+          "keyword_clusters": [
+            "food science", "formulation", "ingredient", "shelf life", "preservation",
+            "texture", "viscosity", "emulsification", "homogenization", "pasteurization",
+            "sterilization", "water activity", "aw", "moisture content", "sensory",
+            "flavor", "aroma", "mouthfeel", "color", "appearance", "stability",
+            "food safety", "haccp", "fda", "usda", "gras", "food grade"
+          ]
+        },
+        {
+          "id": "microbiology_food",
+          "label": "Microbiology",
+          "default_checked": false,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "microbiology", "microorganism", "yeast", "bacteria", "fermentation",
+            "lactobacillus", "saccharomyces", "brettanomyces", "wild yeast", "sourdough",
+            "culture", "strain", "inoculation", "pitch rate", "colony", "pathogen",
+            "spoilage", "contamination", "sanitation", "cip", "clean in place",
+            "log reduction", "d-value", "z-value", "antimicrobial", "probiotic"
+          ]
+        },
+        {
+          "id": "chemistry_food",
+          "label": "Chemistry",
+          "default_checked": false,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "chemistry", "chemical reaction", "maillard", "caramelization", "oxidation",
+            "ph", "acidity", "alkalinity", "titration", "buffer", "acid base",
+            "protein denaturation", "starch gelatinization", "pectin", "gelatin",
+            "lipid", "fat", "oil", "emulsifier", "lecithin", "surfactant",
+            "hop", "alpha acid", "iso-alpha acid", "tannin", "polyphenol", "anthocyanin",
+            "sugar", "glucose", "fructose", "maltose", "dextrin", "fermentable"
+          ]
+        },
+        {
+          "id": "fluid_dynamics_food",
+          "label": "Fluid Dynamics and Process Engineering",
+          "default_checked": false,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "fluid dynamics", "flow rate", "viscosity", "reynolds number", "turbulent",
+            "laminar", "pump", "pipe", "pressure drop", "heat exchanger", "plate chiller",
+            "counterflow", "whirlpool", "centrifuge", "filter", "filtration", "membrane",
+            "lautering", "sparge", "mash", "wort", "carbonation", "pressure",
+            "co2", "nitrogen", "dissolved oxygen", "do", "brix", "specific gravity", "plato"
+          ]
+        },
+        {
+          "id": "physics_food",
+          "label": "Physics",
+          "default_checked": false,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "pressure", "temperature", "heat", "thermodynamics", "phase change",
+            "crystallization", "nucleation", "freezing point", "boiling point",
+            "evaporation", "condensation", "spray drying", "freeze drying",
+            "ultrasound", "high pressure processing", "hpp", "pulsed electric field",
+            "light", "uv", "infrared", "microwave", "ohmic heating", "extrusion"
+          ]
+        }
+      ]
+    },
+
+    "energy_cleantech": {
+      "label": "Energy / Cleantech",
+      "stage1_values": ["energy", "cleantech", "clean energy", "renewable", "solar", "wind", "battery", "storage", "grid", "utilities"],
+      "disciplines": [
+        {
+          "id": "electrical_engineering",
+          "label": "Electrical Engineering",
+          "default_checked": true,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "electrical", "circuit", "voltage", "current", "resistance", "impedance",
+            "power electronics", "inverter", "converter", "rectifier", "transformer",
+            "switching frequency", "duty cycle", "pwm", "mosfet", "igbt", "gan", "sic",
+            "pcb", "schematic", "firmware", "embedded", "microcontroller", "fpga",
+            "sensor", "actuator", "signal processing", "adc", "dac", "analog", "digital"
+          ]
+        },
+        {
+          "id": "electrochemistry",
+          "label": "Electrochemistry",
+          "default_checked": false,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "electrochemistry", "electrochemical", "battery", "cell", "cathode", "anode",
+            "electrolyte", "separator", "lithium", "li-ion", "lithium ion", "sodium ion",
+            "solid state", "solid electrolyte", "sei", "dendrite", "cycle life",
+            "capacity", "energy density", "power density", "c-rate", "soc", "soh",
+            "bms", "battery management", "thermal runaway", "fast charging", "degradation",
+            "electrodeposition", "plating", "corrosion", "passivation", "impedance spectroscopy"
+          ]
+        },
+        {
+          "id": "photovoltaics",
+          "label": "Photovoltaics and Solar",
+          "default_checked": false,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "photovoltaic", "pv", "solar cell", "solar panel", "efficiency",
+            "perovskite", "silicon", "thin film", "cdte", "cigs", "tandem cell",
+            "bandgap", "absorption", "recombination", "carrier", "junction",
+            "irradiance", "bifacial", "tracking", "mppt", "inverter", "string",
+            "degradation", "lvt", "pvt", "encapsulant", "backsheet", "lamination"
+          ]
+        },
+        {
+          "id": "thermodynamics_energy",
+          "label": "Thermodynamics",
+          "default_checked": false,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "thermodynamic", "heat", "thermal", "efficiency", "carnot", "rankine",
+            "brayton", "stirling", "heat pump", "chp", "combined heat power",
+            "waste heat recovery", "orc", "organic rankine", "geothermal",
+            "thermal storage", "pcm", "phase change material", "insulation",
+            "r-value", "u-value", "heat loss", "heat gain", "thermal mass"
+          ]
+        }
+      ]
+    },
+
+    "medical_device": {
+      "label": "Medical Device",
+      "stage1_values": ["medical device", "medtech", "medical technology", "diagnostics", "imaging", "wearable health", "surgical"],
+      "disciplines": [
+        {
+          "id": "biomedical_engineering",
+          "label": "Biomedical Engineering",
+          "default_checked": true,
+          "match_threshold": 1,
+          "keyword_clusters": [
+            "biomedical", "medical device", "implant", "prosthetic", "orthopedic",
+            "cardiovascular", "catheter", "stent", "pacemaker", "defibrillator",
+            "surgical instrument", "endoscope", "laparoscopic", "robotic surgery",
+            "wound healing", "tissue engineering", "scaffold", "biomaterial", "biocompatible",
+            "iso 13485", "fda 510k", "pma", "ce mark", "design control", "risk management"
+          ]
+        },
+        {
+          "id": "signal_processing_med",
+          "label": "Signal Processing",
+          "default_checked": false,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "signal processing", "ecg", "eeg", "emg", "eog", "ppg", "biosignal",
+            "filtering", "noise reduction", "artifact", "sampling rate", "nyquist",
+            "fft", "wavelet", "spectral analysis", "feature extraction",
+            "real-time processing", "dsp", "fpga", "embedded processing",
+            "sensor fusion", "accelerometer", "gyroscope", "imu", "wearable"
+          ]
+        },
+        {
+          "id": "imaging",
+          "label": "Medical Imaging",
+          "default_checked": false,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "imaging", "mri", "ct scan", "x-ray", "ultrasound", "pet scan",
+            "dicom", "pacs", "image reconstruction", "image processing", "segmentation",
+            "detection", "classification", "radiology", "pathology", "histology",
+            "fluorescence", "optical coherence", "oct", "endoscopy", "bronchoscopy",
+            "resolution", "contrast", "sensitivity", "specificity", "auc", "roc"
+          ]
+        }
+      ]
+    },
+
+    "agriculture_agtech": {
+      "label": "Agriculture / AgTech",
+      "stage1_values": ["agriculture", "agtech", "farming", "crop", "livestock", "horticulture", "aquaculture", "food production", "precision agriculture"],
+      "disciplines": [
+        {
+          "id": "agronomy",
+          "label": "Agronomy and Plant Science",
+          "default_checked": true,
+          "match_threshold": 1,
+          "keyword_clusters": [
+            "agronomy", "crop", "plant", "soil", "nutrient", "fertilizer", "irrigation",
+            "yield", "germination", "photosynthesis", "chlorophyll", "nitrogen",
+            "phosphorus", "potassium", "npk", "ph", "organic matter", "microbiome",
+            "pest", "pathogen", "disease resistance", "drought tolerance", "heat stress",
+            "variety", "cultivar", "hybrid", "gmo", "trait", "phenotype", "genotype"
+          ]
+        },
+        {
+          "id": "precision_agriculture",
+          "label": "Precision Agriculture",
+          "default_checked": false,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "precision agriculture", "gps", "remote sensing", "satellite imagery",
+            "ndvi", "multispectral", "hyperspectral", "lidar", "drone", "uav",
+            "variable rate", "prescription map", "field variability", "zone management",
+            "soil sampling", "yield map", "as-applied", "guidance system",
+            "iot", "sensor", "weather station", "microclimate", "decision support"
+          ]
+        },
+        {
+          "id": "biotechnology_ag",
+          "label": "Agricultural Biotechnology",
+          "default_checked": false,
+          "match_threshold": 2,
+          "keyword_clusters": [
+            "biotechnology", "genetic", "gene editing", "crispr", "trait development",
+            "marker assisted", "genomic selection", "breeding", "seed treatment",
+            "biostimulant", "biopesticide", "biocontrol", "rhizobium", "mycorrhizae",
+            "fermentation", "microbial", "inoculant", "phage", "rna interference"
+          ]
+        }
+      ]
+    }
+  },
+
+  "fallback_general": {
+    "description": "Used when Stage 1 industry does not match any known industry key, or when client's industry is too broad to classify. Shows a universal set of disciplines drawn from STEM.",
+    "disciplines": [
+      {"id": "engineering_general", "label": "Engineering", "default_checked": false, "match_threshold": 2, "keyword_clusters": ["engineering", "design", "prototype", "testing", "iteration", "technical", "specification", "system", "component", "module"]},
+      {"id": "chemistry_general", "label": "Chemistry", "default_checked": false, "match_threshold": 2, "keyword_clusters": ["chemistry", "chemical", "compound", "reaction", "molecule", "synthesis", "formulation", "ph", "solvent", "reagent"]},
+      {"id": "biology_general", "label": "Biology", "default_checked": false, "match_threshold": 2, "keyword_clusters": ["biology", "biological", "cell", "organism", "protein", "gene", "bacteria", "virus", "tissue", "assay"]},
+      {"id": "physics_general", "label": "Physics", "default_checked": false, "match_threshold": 2, "keyword_clusters": ["physics", "force", "energy", "momentum", "thermodynamic", "quantum", "electromagnetism", "optics", "acoustics", "radiation"]},
+      {"id": "computer_science_general", "label": "Computer Science", "default_checked": false, "match_threshold": 2, "keyword_clusters": ["software", "algorithm", "machine learning", "neural network", "data", "system architecture", "api", "database", "programming", "code"]},
+      {"id": "materials_general", "label": "Materials Science", "default_checked": false, "match_threshold": 2, "keyword_clusters": ["material", "alloy", "composite", "polymer", "coating", "microstructure", "strength", "hardness", "thermal", "conductivity"]}
+    ]
+  }
+}
