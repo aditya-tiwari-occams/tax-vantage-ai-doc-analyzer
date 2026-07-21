@@ -65,8 +65,6 @@ def print_result(result: dict) -> None:
         conf    = f"{p.get('confidence', 0) * 100:.0f}%"
         print(f"[{i}]  {p.get('project_title', '?')}  |  TY:{p.get('tax_year','?')}  |  conf:{conf}{review}")
         print(f"     Contract:   {p.get('contract_type','?')}")
-        print(f"     Qualified:  {p.get('qualification_status','?')}  |  "
-              f"Funded: {p.get('funded','?')}  |  4-Part: {p.get('passes_four_part_test','?')}")
         print(f"     Man hours:  {p.get('total_man_hours') or '—'}  |  "
               f"Employees: {p.get('employees_completing_research') or '—'}")
         desc = p.get("description") or ""

@@ -32,16 +32,14 @@ states cost only in QRE/wage dollars, `total_man_hours` and
 | **Total Man Hours** | `Man hours: <n>` | Integer; **null** if absent |
 | **Employees completing research** | Count of names after `Employees Completing Research:` / "conducted by the following employees" | Return the **count**, not the names; null if absent |
 | **Supplies used** | "Supplies" line-items / materials actually used | Ignore statutory IRC definitions of "supplies" |
-| **Funded?** | "funded research exclusion not applicable" / "taxpayer bears all financial risk" → **No**; funded by another party → **Yes** | |
-| **Passes Four-Part Test?** | "4. Four-Part Test Analysis" — all of Test 1–4 = PASS → **Yes** | |
-| **Qualification Status** | Treated as a qualified research activity → **Qualified** | |
+| **Tax Year** | "Tax Year(s): 2025" / "Project Years: 2024" | |
 | **confidence** | Model's 0–1 self-rating; lower when fields left empty | Surfaced in UI for review |
 
 ## Verified extraction (offline mock, multi-project.pdf)
-| Project | Contract | Man hours | Employees* | Funded | 4-part |
-|---------|----------|-----------|-----------|--------|--------|
-| Job 314 — Coyote Flood Management | Fixed Price | 24,382 | ~170 | No | Yes |
-| Job 317 — Tunitas Creek Beach Improvements | Fixed Price | 9,754 | ~74 | No | Yes |
+| Project | Contract | Man hours | Employees* |
+|---------|----------|-----------|-----------|
+| Job 314 — Coyote Flood Management | Fixed Price | 24,382 | ~170 |
+| Job 317 — Tunitas Creek Beach Improvements | Fixed Price | 9,754 | ~74 |
 
 \* Employee counts from the mock's name-list counting are approximate; the real
 LLM counts distinct named individuals more precisely.

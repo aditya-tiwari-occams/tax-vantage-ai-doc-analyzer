@@ -50,9 +50,6 @@ PROJECTS = [
         "man_hours": 4200,
         "employees": 6,
         "supplies": "AWS GPU compute, IoT reefer sensors, test packaging units",
-        "qualified": "Qualified",
-        "funded": "No",
-        "four_part": "Yes",
     },
     {
         "title": "Self-Healing Warehouse Vision QA",
@@ -82,9 +79,6 @@ PROJECTS = [
         "man_hours": 3100,
         "employees": 4,
         "supplies": "Edge GPU devices, industrial cameras, annotation tooling",
-        "qualified": "Qualified",
-        "funded": "No",
-        "four_part": "Yes",
     },
 ]
 

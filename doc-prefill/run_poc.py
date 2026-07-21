@@ -29,7 +29,6 @@ def main():
             print(f"  [{i}] {p['project_title']!r}")
             print(f"      contract_type = {p['contract_type']}")
             print(f"      man_hours = {p['total_man_hours']}  employees = {p['employees_completing_research']}")
-            print(f"      qualified = {p['qualification_status']}  funded = {p['funded']}  4-part = {p['passes_four_part_test']}")
             print(f"      supplies = {p['supplies_used']}")
             print(f"      uncertainty = {p['technical_challenges_uncertainties'][:90]}...")
             print(f"      alternatives = {p['solutions_alternatives_considered'][:90]}...")

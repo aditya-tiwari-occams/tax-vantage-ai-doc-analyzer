@@ -881,6 +881,12 @@ async def run_batch(paths: List[str], concurrency: int = MAX_CONCURRENCY,
         if lg:
             lg.log(f"  ⚠ Industry detection skipped: {_e}")
 
+    # Drop retired Stage-9 fields (no longer in schema / UI / API)
+    _DROPPED = ("qualification_status", "funded", "passes_four_part_test")
+    for p in projects:
+        for k in _DROPPED:
+            p.pop(k, None)
+
     needs_review = sum(1 for p in projects if p.get("_needs_review"))
     strategies = {}
     for s in sections:

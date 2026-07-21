@@ -238,9 +238,6 @@ These mirror the Tax-Vantage Stage 9 form exactly:
 | `total_man_hours` | integer / null | "Man hours: 24382" — never derived from $ amounts |
 | `employees_completing_research` | integer / null | Count of distinct names, or explicit number |
 | `supplies_used` | string | Materials actually consumed in research |
-| `funded` | Yes / No | Whether another party bore financial risk |
-| `passes_four_part_test` | Yes / No | IRC §41 four-part test result |
-| `qualification_status` | Qualified / Not Qualified | Overall qualification determination |
 | `confidence` | 0.0–1.0 | Model's self-rating per project |
 
 ### Contract Type Mapping

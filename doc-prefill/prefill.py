@@ -40,8 +40,8 @@ CACHE_DIR = os.environ.get("POC_CACHE", os.path.join(os.path.dirname(os.path.abs
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 MODEL = os.environ.get("PREFILL_MODEL", "gpt-4o-2024-08-06")
-PROMPT_VERSION = "v10"     # bump to invalidate LLM cache on prompt change
-SCHEMA_VERSION = "v2"      # bump to invalidate LLM cache on schema change
+PROMPT_VERSION = "v11"     # bump to invalidate LLM cache on prompt change
+SCHEMA_VERSION = "v3"      # bump to invalidate LLM cache on schema change
 
 # ---- Stage-9 field contract (mirrors the portal form) ----
 CONTRACT_TYPES = ["Fixed Price", "Time & Material", "Cost Plus", "Other",
@@ -61,9 +61,6 @@ PROJECT_JSON_SCHEMA = {
                     "tax_year": {"type": ["string", "null"]},
                     "contract_type": {"type": "string", "enum": CONTRACT_TYPES},
                     "description": {"type": "string"},
-                    "qualification_status": {"type": "string", "enum": ["Qualified", "Not Qualified"]},
-                    "funded": {"type": "string", "enum": ["Yes", "No"]},
-                    "passes_four_part_test": {"type": "string", "enum": ["Yes", "No"]},
                     "total_man_hours": {"type": ["integer", "null"]},
                     "employees_completing_research": {"type": ["integer", "null"]},
                     "supplies_used": {"type": "string"},
@@ -73,7 +70,6 @@ PROJECT_JSON_SCHEMA = {
                 },
                 "required": [
                     "project_title", "tax_year", "contract_type", "description",
-                    "qualification_status", "funded", "passes_four_part_test",
                     "total_man_hours", "employees_completing_research",
                     "supplies_used", "solutions_alternatives_considered",
                     "technical_challenges_uncertainties", "confidence",
@@ -180,7 +176,7 @@ SYSTEM_PROMPT = (
     "- employees_completing_research: count UNIQUE individuals across all sources\n"
     "- description / technical_challenges / solutions: use the richest / longest version, "
     "supplemented with additional detail from other sources\n"
-    "- tax_year, contract_type, funded, passes_four_part_test: use the most explicit statement\n"
+    "- tax_year, contract_type: use the most explicit statement\n"
     "\n"
 
     "━━━ CORE EXTRACTION RULES ━━━\n"
@@ -232,17 +228,6 @@ SYSTEM_PROMPT = (
     "EXCLUDE: subcontractor costs (cost type S), labor costs (cost type L/PR), "
     "and statutory IRC definitions of 'supplies'. If dollar amounts are available "
     "provide them; otherwise describe the materials.\n"
-    "- funded: signals → government agency as client = likely 'Yes'; fixed-price or "
-    "cost-plus contract with client paying regardless of outcome = likely 'Yes'; "
-    "internal R&D where company bears all financial risk = 'No'; no contract info "
-    "found = default 'No' and lower confidence. 'No' if taxpayer bore the risk.\n"
-    "- passes_four_part_test: 'Yes' if all four IRC §41 criteria are evidenced. "
-    "Phases that qualify: hydraulic/structural testing, iterative design phases, "
-    "novel repair methods under technical uncertainty, custom engineering design. "
-    "Phases that do NOT qualify: project management, site cleanup/demob, landscaping, "
-    "permitting, routine inspection. If both qualifying and non-qualifying phases are "
-    "present → set qualification_status to 'Not Qualified' and lower confidence.\n"
-    "- qualification_status: 'Qualified' if treated as qualified research; else 'Not Qualified'.\n"
     "- SCENARIO M (mixed language): If the document is in a language other than English, "
     "extract all fields in English. Translate project names and descriptions to English. "
     "Add a note in the description field: '[Translated from {language}]'.\n"
@@ -357,9 +342,6 @@ def _mock_llm(text: str) -> dict:
             "tax_year": tax_year,
             "contract_type": ctype,
             "description": grab("Project Description|Description", "Technical|Process|Alternatives"),
-            "qualification_status": "Qualified",
-            "funded": "No",
-            "passes_four_part_test": "Yes",
             "total_man_hours": int(mh.group(1).replace(",", "")) if mh else None,
             "employees_completing_research": emp_n,
             "supplies_used": sup_m.group(1).strip() if sup_m else "",
