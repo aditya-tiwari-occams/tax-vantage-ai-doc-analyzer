@@ -88,7 +88,15 @@
 
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
   .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:18px}
-  label.fld{display:block;margin:16px 0 6px;font-weight:600;font-size:14px}
+  label.fld{display:flex;align-items:center;gap:6px;margin:16px 0 6px;font-weight:600;font-size:14px}
+  .src-btn{display:inline-flex;align-items:center;justify-content:center;width:19px;height:19px;
+           border-radius:6px;border:1px solid var(--line);background:#fff;color:#9aa1ad;
+           cursor:pointer;padding:0;flex:none}
+  .src-btn:hover{border-color:var(--orange);color:var(--orange)}
+  .src-btn.unverified{border-color:#f0b429;color:#b9770e}
+  .src-btn.unverified:hover{border-color:#b9770e;color:#b9770e}
+  .src-btn.edited{border-color:#9aa1ad;color:#6b7280}
+  .src-btn.edited:hover{border-color:#3b4252;color:#3b4252}
   input.txt,select.txt,textarea.txt{width:100%;border:1px solid #d6dae0;border-radius:9px;padding:11px 12px;
        font-size:14.5px;font-family:inherit;background:#fff;color:var(--ink)}
   textarea.txt{min-height:92px;resize:vertical}
@@ -235,7 +243,10 @@
         <hr/>
         <div class="row-between">
           <div class="yearlbl" id="yearLabel">Add projects for years: 2025</div>
-          <button class="btn btn-outline btn-sm">Request Statistical Sample</button>
+          <div style="display:flex;gap:10px">
+            <button class="btn btn-outline btn-sm" onclick="downloadProofOfWork()">⬇ Proof of Work</button>
+            <button class="btn btn-outline btn-sm">Request Statistical Sample</button>
+          </div>
         </div>
 
         <!-- empty state -->
@@ -318,7 +329,13 @@ const MOCK_PREFILL = [
     supplies:"Geotechnical instrumentation, formwork, dewatering equipment",
     alternatives:"Evaluated conventional rip-rap bank armoring (rejected — insufficient conveyance gain and habitat impact) and standard sheet-pile walls (rejected — constructability in saturated alluvium). Iterated on a hybrid structural/bioengineered approach.",
     uncertainty:"Uncertainty existed around achieving target conveyance capacity without exceeding scour and erosion thresholds under variable flow, and whether the chosen foundation method would develop adequate bearing in saturated alluvial soils where standard test data was limited.",
-    confidence:0.91
+    confidence:0.91,
+    citations:{
+      project_title:{quote:"Job 314 - Coyote Flood Management", page:2, section:"i) Basic Data", verified:true, source_file:"multi-project.pdf"},
+      contract_type:{quote:"Contract Type: Lump Sum / Fixed Fee", page:2, section:"i) Basic Data", verified:true, source_file:"multi-project.pdf"},
+      total_man_hours:{quote:"Total for job: 314   Regular: 5,926.50   OT: 133.00   Total: 6,059.50", page:3, section:"i) Basic Data", verified:true, source_file:"multi-project.pdf"},
+      employees_completing_research:{quote:"Employees Completing Research: 170", page:2, section:"i) Basic Data", verified:true, source_file:"multi-project.pdf"},
+    }
   },
   {
     project_title:"Job 317 — Tunitas Creek Beach Improvements",
@@ -338,6 +355,36 @@ const emptyState = document.getElementById('emptyState');
 const addMoreRow = document.getElementById('addMoreRow');
 let counter = 0;
 
+/* ── Proof of Work (citations) ──────────────────────────────────────── */
+// data object per project id, keyed the same as returned by projectCard(data),
+// kept around so downloadProofOfWork()/showSourceModal() can read citations +
+// the AI-extracted values without re-parsing the DOM.
+const projData = {};
+
+// Mirrors doc-prefill/citations.py CITED_FIELDS / FIELD_LABELS. Keep in sync.
+const CITED_FIELDS = [
+  'project_title','tax_year','contract_type','description','total_man_hours',
+  'employees_completing_research','supplies_used',
+  'solutions_alternatives_considered','technical_challenges_uncertainties',
+];
+const FIELD_LABELS = {
+  project_title:'Project Title', tax_year:'Tax Year', contract_type:'Contract Type',
+  description:'Description', total_man_hours:'Total Man Hours',
+  employees_completing_research:'Employees Completing Research',
+  supplies_used:'Supplies Used',
+  solutions_alternatives_considered:'Solutions / Alternatives Considered',
+  technical_challenges_uncertainties:'Technical Challenges / Uncertainties',
+};
+// Card `data` objects use short UI keys (see mapApiProject) that differ from
+// the API/citation field names above — map citation field -> data key.
+const FIELD_TO_DATA_KEY = {
+  project_title:'project_title', tax_year:'tax_year', contract_type:'contract_type',
+  description:'description', total_man_hours:'man_hours',
+  employees_completing_research:'employees', supplies_used:'supplies',
+  solutions_alternatives_considered:'alternatives',
+  technical_challenges_uncertainties:'uncertainty',
+};
+
 function optionsHtml(sel){
   return ['<option value="">Select contract type</option>']
     .concat(CONTRACT_TYPES.map(t=>`<option ${t===sel?'selected':''}>${t}</option>`)).join('');
@@ -354,6 +401,16 @@ function projectCard(data){
   const id = 'p'+counter;
   const ai = !!data; data = data || {};
   const fill = ai ? 'ai-fill' : '';
+  projData[id] = data;
+  // Snapshot the AI-extracted values BEFORE any user edits, so we can later
+  // tell whether a field has drifted from what its citation actually proves.
+  data._originalValues = {
+    project_title: data.project_title, tax_year: data.tax_year,
+    contract_type: data.contract_type, description: data.description,
+    man_hours: data.man_hours, employees: data.employees,
+    supplies: data.supplies, alternatives: data.alternatives,
+    uncertainty: data.uncertainty,
+  };
   const wrap = document.createElement('div');
   wrap.className = 'proj';
   wrap.id = id;
@@ -361,7 +418,7 @@ function projectCard(data){
     <div class="proj-head" onclick="toggleProj('${id}')">
       <div class="ttl">
         <span>${counter}. ${data.project_title || 'Untitled Project'}</span>
-        ${data.tax_year?`<span class="badge" style="background:#eef2f7;color:#3b4252">TY ${data.tax_year}</span>`:''}
+        ${data.tax_year?`<span class="badge" style="background:#eef2f7;color:#3b4252">TY ${data.tax_year}</span>${srcIcon(id,'tax_year')}`:''}
         ${ai?'<span class="badge ai">✦ AI prefilled</span>':''}
         ${ai?confBadge(data.confidence):''}
       </div>
@@ -369,30 +426,37 @@ function projectCard(data){
     </div>
     <div class="proj-body">
       <div class="grid2">
-        <div><label class="fld">Project Title</label>
-          <input class="txt ${fill}" placeholder="Enter project title" value="${esc(data.project_title)}" oninput="syncTitle('${id}',this.value)"></div>
-        <div><label class="fld">Contract Type</label>
-          <select class="txt ${data.contract_type?fill:''}">${optionsHtml(data.contract_type)}</select></div>
+        <div><label class="fld">Project Title ${srcIcon(id,'project_title')}</label>
+          <input class="txt ${fill}" placeholder="Enter project title" value="${esc(data.project_title)}"
+                 oninput="syncTitle('${id}',this.value);onFieldEdited('${id}','project_title','project_title',this.value)"></div>
+        <div><label class="fld">Contract Type ${srcIcon(id,'contract_type')}</label>
+          <select class="txt ${data.contract_type?fill:''}" onchange="onFieldEdited('${id}','contract_type','contract_type',this.value)">${optionsHtml(data.contract_type)}</select></div>
       </div>
-      <label class="fld">Description</label>
-      <textarea class="txt ${data.description?fill:''}" maxlength="1000" placeholder="Describe the project's R&D activities...." oninput="count(this)">${esc(data.description)}</textarea>
+      <label class="fld">Description ${srcIcon(id,'description')}</label>
+      <textarea class="txt ${data.description?fill:''}" maxlength="1000" placeholder="Describe the project's R&D activities...."
+                oninput="count(this);onFieldEdited('${id}','description','description',this.value)">${esc(data.description)}</textarea>
       <div class="counter">${(data.description||'').length}/1000 characters</div>
 
       <div class="grid3" style="margin-top:4px">
-        <div><label class="fld">Total Man Hours</label>
-          <input class="txt ${data.man_hours?fill:''}" placeholder="Enter total man hours" value="${data.man_hours||''}"></div>
-        <div><label class="fld">Employees completing research</label>
-          <input class="txt ${data.employees?fill:''}" placeholder="Enter number of employees completing research" value="${data.employees||''}"></div>
-        <div><label class="fld">Supplies used</label>
-          <input class="txt ${data.supplies?fill:''}" placeholder="Enter supplies used" value="${esc(data.supplies)}"></div>
+        <div><label class="fld">Total Man Hours ${srcIcon(id,'total_man_hours')}</label>
+          <input class="txt ${data.man_hours?fill:''}" placeholder="Enter total man hours" value="${data.man_hours||''}"
+                 oninput="onFieldEdited('${id}','man_hours','total_man_hours',this.value)"></div>
+        <div><label class="fld">Employees completing research ${srcIcon(id,'employees_completing_research')}</label>
+          <input class="txt ${data.employees?fill:''}" placeholder="Enter number of employees completing research" value="${data.employees||''}"
+                 oninput="onFieldEdited('${id}','employees','employees_completing_research',this.value)"></div>
+        <div><label class="fld">Supplies used ${srcIcon(id,'supplies_used')}</label>
+          <input class="txt ${data.supplies?fill:''}" placeholder="Enter supplies used" value="${esc(data.supplies)}"
+                 oninput="onFieldEdited('${id}','supplies','supplies_used',this.value)"></div>
       </div>
 
-      <label class="fld">Solutions / Alternatives Considered</label>
-      <textarea class="txt ${data.alternatives?fill:''}" maxlength="1000" placeholder="Describe the solutions and alternatives you considered..." oninput="count(this)">${esc(data.alternatives)}</textarea>
+      <label class="fld">Solutions / Alternatives Considered ${srcIcon(id,'solutions_alternatives_considered')}</label>
+      <textarea class="txt ${data.alternatives?fill:''}" maxlength="1000" placeholder="Describe the solutions and alternatives you considered..."
+                oninput="count(this);onFieldEdited('${id}','alternatives','solutions_alternatives_considered',this.value)">${esc(data.alternatives)}</textarea>
       <div class="counter">${(data.alternatives||'').length}/1000 characters</div>
 
-      <label class="fld">Technical Challenges / Uncertainties</label>
-      <textarea class="txt ${data.uncertainty?fill:''}" maxlength="1000" placeholder="Describe the technical challenges and uncertainties...." oninput="count(this)">${esc(data.uncertainty)}</textarea>
+      <label class="fld">Technical Challenges / Uncertainties ${srcIcon(id,'technical_challenges_uncertainties')}</label>
+      <textarea class="txt ${data.uncertainty?fill:''}" maxlength="1000" placeholder="Describe the technical challenges and uncertainties...."
+                oninput="count(this);onFieldEdited('${id}','uncertainty','technical_challenges_uncertainties',this.value)">${esc(data.uncertainty)}</textarea>
       <div class="counter">${(data.uncertainty||'').length}/1000 characters</div>
 
       <label class="fld">Industry &amp; Science Disciplines</label>
@@ -421,7 +485,175 @@ function esc(s){return (s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').repl
 function count(t){const c=t.parentElement.querySelector('.counter')||t.nextElementSibling;if(c&&c.classList.contains('counter'))c.textContent=t.value.length+'/1000 characters';}
 function toggleProj(id){document.getElementById(id).classList.toggle('collapsed');}
 function syncTitle(id,v){const span=document.querySelector('#'+id+' .ttl span');const n=span.textContent.split('.')[0];span.textContent=n+'. '+(v||'Untitled Project');}
-function deleteProj(id){document.getElementById(id).remove();if(!projectsEl.children.length){emptyState.style.display='';addMoreRow.style.display='none';}}
+function deleteProj(id){document.getElementById(id).remove();delete projData[id];if(!projectsEl.children.length){emptyState.style.display='';addMoreRow.style.display='none';}}
+
+/* ── Proof of Work helpers ───────────────────────────────────────────── */
+
+// True if a cited field's live value has drifted from the AI-extracted value
+// its citation was grounded against. Only meaningful when a citation exists
+// at all — manually-entered projects have no citations to go stale.
+function _isFieldEdited(id, field){
+  const data = projData[id] || {};
+  const dataKey = FIELD_TO_DATA_KEY[field];
+  const orig = data._originalValues || {};
+  if(!Object.prototype.hasOwnProperty.call(orig, dataKey)) return false;
+  return String(orig[dataKey] ?? '') !== String(data[dataKey] ?? '');
+}
+
+// Small inline icon rendered next to a field's label, only when that field
+// has a captured citation. Orange border = verified quote found in the
+// source text; amber = the AI provided a quote but it couldn't be matched
+// verbatim; grey = the on-screen value has since been edited, so the
+// citation now refers to a value that's no longer shown (flagged rather
+// than silently presented as current proof).
+function srcIcon(id, field){
+  const c = ((projData[id]||{}).citations || {})[field];
+  if(!c || !c.quote) return '';
+  const edited = _isFieldEdited(id, field);
+  let cls, title;
+  if(edited){
+    cls = 'edited';
+    title = 'Value edited since AI extraction — click to see the original AI-cited source';
+  } else if(c.verified){
+    cls = '';
+    title = 'View source citation';
+  } else {
+    cls = 'unverified';
+    title = 'Source unverified — click to review';
+  }
+  return `<button type="button" class="src-btn ${cls}" data-field="${field}" title="${title}" onclick="event.stopPropagation();showSourceModal('${id}','${field}')">` +
+    `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">` +
+    `<path d="M6 3h9l5 5v13H6z"/><path d="M9 12h6M9 16h6M9 8h4"/></svg></button>`;
+}
+
+// Called from every editable field's oninput/onchange. Keeps projData[id] in
+// sync with the live DOM value (so downloadProofOfWork() reflects the form
+// as it actually is) and re-renders that field's source icon to reflect
+// whether it's now stale relative to its citation.
+function onFieldEdited(id, dataKey, field, value){
+  const data = projData[id];
+  if(!data) return;
+  data[dataKey] = value;
+  const btn = document.querySelector(`#${id} .src-btn[data-field="${field}"]`);
+  if(btn){
+    const html = srcIcon(id, field);
+    if(html) btn.outerHTML = html;   // still has a citation — just refresh its state
+    else btn.remove();                // (shouldn't happen — a citation doesn't disappear)
+  }
+}
+
+function showSourceModal(id, field){
+  const data = projData[id] || {};
+  const c = (data.citations || {})[field];
+  const label = FIELD_LABELS[field] || field;
+  if(!c || !c.quote){
+    showInfoModal({
+      title: label,
+      body: 'No source citation was captured for this field — it may have been left blank, entered manually, or inferred without a directly quotable source span.',
+      type: 'info',
+    });
+    return;
+  }
+  // verified and page are independent — a DOCX-sourced quote can be verified
+  // with no page number (DOCX extraction has no page markers). Don't conflate
+  // "no page available" with "not verified".
+  let pageStr;
+  if(c.verified) pageStr = c.page ? `Page ${c.page}` : 'Verified (page number unavailable)';
+  else pageStr = 'Location unverified';
+  const sectionStr = c.section ? `  •  Section: ${c.section}` : '';
+  const warnStr = c.verified ? '' : '  — This quote could not be matched verbatim in the source text; please double-check this field manually.';
+
+  const edited = _isFieldEdited(id, field);
+  const dataKey = FIELD_TO_DATA_KEY[field];
+  const bullets = [];
+  if(edited){
+    const origVal = (data._originalValues || {})[dataKey];
+    bullets.push(esc(`\u26a0 This field has been edited since AI extraction. The citation below `
+      + `refers to the ORIGINAL AI-extracted value ("${origVal ?? '—'}"), not the current value `
+      + `("${data[dataKey] ?? '—'}"). Please re-verify this field manually.`));
+  }
+  bullets.push(`\u201c${esc(c.quote)}\u201d`);
+
+  showInfoModal({
+    title: label,
+    // `body` is rendered via textContent by showInfoModal (safe as-is). Only
+    // `bullets` goes through innerHTML, so escape the document-derived quote
+    // before it gets anywhere near HTML.
+    body: `Source file: ${c.source_file || 'unknown'}  •  ${pageStr}${sectionStr}${warnStr}`,
+    bullets,
+    type: edited ? 'warn' : (c.verified ? 'info' : 'warn'),
+  });
+}
+
+function _escMd(s){ return (s==null ? '' : String(s)).replace(/\|/g,'\\|').replace(/\n/g,' ').trim(); }
+
+// Mirrors doc-prefill/citations.py render_project_markdown() so the exported
+// report matches whatever the CLI/API-side renderer would produce.
+function renderProjectMarkdown(id){
+  const data = projData[id] || {};
+  const citations = data.citations || {};
+  const title = data.project_title || 'Untitled Project';
+  const lines = [`## ${title}`, '', '| Field | Value | Source File | Page | Section | Quote |', '|---|---|---|---|---|---|'];
+  CITED_FIELDS.forEach(field=>{
+    const label = FIELD_LABELS[field];
+    const dataKey = FIELD_TO_DATA_KEY[field];
+    const c = citations[field] || {};
+    // Live value, always — this export reflects the form as it currently
+    // stands, not a frozen snapshot from upload time.
+    let value = _escMd(data[dataKey]) || '—';
+    // Only a field with an actual citation can go "stale" — a manually
+    // entered project (no citations at all) was never proven, so there's
+    // nothing to have drifted from.
+    const edited = !!c.quote && _isFieldEdited(id, field);
+    if(edited){
+      const origVal = _escMd((data._originalValues || {})[dataKey]) || '—';
+      value += ` _(edited — AI value: ${origVal})_`;
+    }
+    const src = c.source_file || '—';
+    // verified and page are independent — a DOCX-sourced quote can be
+    // verified with no page number (DOCX extraction has no page markers).
+    // Don't conflate "no page available" with "not verified".
+    let page = '—';
+    if(c.verified) page = c.page ? `p. ${c.page}` : 'verified';
+    else if(c.quote) page = 'unverified';
+    // The quote/page below describe the ORIGINAL AI-extracted value, not the
+    // edited one — flag that explicitly rather than presenting stale proof
+    // as if it verifies the current value.
+    if(edited && page !== '—') page += ' (pre-edit)';
+    const section = _escMd(c.section) || '—';
+    let quote = _escMd(c.quote) || '—';
+    if(quote.length > 160) quote = quote.slice(0,157) + '...';
+    lines.push(`| ${label} | ${value} | ${src} | ${page} | ${section} | \u201c${quote}\u201d |`);
+  });
+  lines.push('');
+  return lines.join('\n');
+}
+
+function downloadProofOfWork(){
+  const ids = [...projectsEl.children].map(el=>el.id).filter(id=>projData[id]);
+  if(!ids.length){
+    showInfoModal({
+      title: 'No projects to export',
+      body: 'Add or upload at least one project before downloading a proof-of-work report.',
+      type: 'info',
+    });
+    return;
+  }
+  const header = [
+    '# Proof of Work — Source Verification Report', '',
+    'Each row below shows exactly where an extracted value was found in the uploaded ' +
+    'source document(s), so it can be verified against the original file. "unverified" ' +
+    'means the AI\u2019s cited quote could not be matched verbatim in the source text — ' +
+    'double-check that field manually.', '',
+  ].join('\n');
+  const md = header + '\n' + ids.map(renderProjectMarkdown).join('\n');
+  const blob = new Blob([md], {type:'text/markdown'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'proof-of-work.md';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
 
 /* ── Industry & Discipline helpers ──────────────────────────────────── */
 
@@ -601,6 +833,8 @@ function mapApiProject(p){
       return ALL_INDUSTRIES.some(i=>i.key===k) ? k : 'fallback_general';
     })(),
     industry_label: p._industry_label || 'Other / General',
+    // Proof of work: per-field {quote, page, section, verified, source_file}.
+    citations: p.citations || {},
   };
 }
 

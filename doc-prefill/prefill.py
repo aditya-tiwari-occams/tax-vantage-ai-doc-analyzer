@@ -40,12 +40,21 @@ CACHE_DIR = os.environ.get("POC_CACHE", os.path.join(os.path.dirname(os.path.abs
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 MODEL = os.environ.get("PREFILL_MODEL", "gpt-4o-2024-08-06")
-PROMPT_VERSION = "v11"     # bump to invalidate LLM cache on prompt change
-SCHEMA_VERSION = "v3"      # bump to invalidate LLM cache on schema change
+PROMPT_VERSION = "v13"     # bump to invalidate LLM cache on prompt change
+SCHEMA_VERSION = "v4"      # bump to invalidate LLM cache on schema change
 
 # ---- Stage-9 field contract (mirrors the portal form) ----
 CONTRACT_TYPES = ["Fixed Price", "Time & Material", "Cost Plus", "Other",
                   "Work was not done under Contract"]
+
+# Fields the model must provide a supporting verbatim citation for ("proof of
+# work"). Kept in sync with citations.CITED_FIELDS — see that module for the
+# grounding (quote -> page/section) and Markdown rendering logic.
+CITED_FIELDS = [
+    "project_title", "tax_year", "contract_type", "description",
+    "total_man_hours", "employees_completing_research", "supplies_used",
+    "solutions_alternatives_considered", "technical_challenges_uncertainties",
+]
 
 PROJECT_JSON_SCHEMA = {
     "type": "object",
@@ -67,12 +76,25 @@ PROJECT_JSON_SCHEMA = {
                     "solutions_alternatives_considered": {"type": "string"},
                     "technical_challenges_uncertainties": {"type": "string"},
                     "confidence": {"type": "number"},
+                    "citations": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "description": (
+                            "Proof-of-work: for each field below, a short VERBATIM "
+                            "excerpt (<=200 chars) copied character-for-character from "
+                            "the source text that supports the extracted value. null "
+                            "if the field itself is null/empty or has no single "
+                            "quotable source span."
+                        ),
+                        "properties": {f: {"type": ["string", "null"]} for f in CITED_FIELDS},
+                        "required": CITED_FIELDS,
+                    },
                 },
                 "required": [
                     "project_title", "tax_year", "contract_type", "description",
                     "total_man_hours", "employees_completing_research",
                     "supplies_used", "solutions_alternatives_considered",
-                    "technical_challenges_uncertainties", "confidence",
+                    "technical_challenges_uncertainties", "confidence", "citations",
                 ],
             },
         }
@@ -235,7 +257,37 @@ SYSTEM_PROMPT = (
     "0.9-1.0 = job clearly identified, all fields populated. "
     "0.75-0.89 = job clear, some fields inferred from context. "
     "0.6-0.74 = partial data available. "
-    "Below 0.6 = ambiguous job identification — flag for human review."
+    "Below 0.6 = ambiguous job identification — flag for human review.\n"
+    "\n"
+
+    "━━━ RULE 5 — CITATIONS (PROOF OF WORK) ━━━\n"
+    "For EVERY field listed in `citations`, provide a short VERBATIM excerpt "
+    "(<=200 characters) copied CHARACTER-FOR-CHARACTER from the source text that "
+    "directly supports the value you extracted for that field. This lets a human "
+    "reviewer verify each field against the original document.\n"
+    "- COPY, do not paraphrase or summarize. Reproduce the exact wording, numbers, "
+    "and punctuation as they appear in the source, including original capitalization.\n"
+    "- Keep it short: the smallest contiguous span that proves the value (a line, "
+    "a table row, a sentence fragment) — not an entire paragraph.\n"
+    "- Do NOT prepend the field's label/heading to the quote (e.g. do NOT quote "
+    "'Project Description: The team designed...' — quote only "
+    "'The team designed...'), UNLESS the label and value appear on the same "
+    "line in the source with no line break between them.\n"
+    "- NEVER truncate a list or sentence with '...' inside the quote and call it "
+    "verbatim — '...' is not in the source. If a list of names/items is too long "
+    "to quote in full within 200 characters, quote only the first 2-3 items "
+    "exactly as they appear, with no trailing ellipsis.\n"
+    "- For total_man_hours / employees_completing_research, quote the line the "
+    "number came from (e.g. 'Total for job: 314   Regular: 5,926.50   OT: 133.00   "
+    "Total: 6,059.50'), not just the bare number.\n"
+    "- For description / technical_challenges_uncertainties / "
+    "solutions_alternatives_considered (which are your own synthesis across "
+    "possibly multiple sentences), quote ONE short, complete, contiguous sentence "
+    "or clause copied verbatim from the source — not the full field value, and "
+    "not a blend of multiple non-adjacent sentences.\n"
+    "- If a field's value is null, empty, or was inferred from general context with "
+    "no single quotable span, set its citation to null. NEVER invent or "
+    "approximate a quote that doesn't appear verbatim in the source text.\n"
 )
 
 
@@ -318,16 +370,21 @@ def _mock_llm(text: str) -> dict:
         # employees: an explicit count, OR a NAME LIST after "Employees Completing
         # Research:" / "conducted by the following employees:" -> count the names.
         emp_n = None
+        emp_cite = None
         m_cnt = re.search(r"Employees on Research\D*(\d+)", b, re.I)
         if m_cnt:
             emp_n = int(m_cnt.group(1))
+            emp_cite = m_cnt.group(0)
         else:
             m_names = re.search(r"(?:Employees Completing Research|conducted by the following employees)\s*[:\-]\s*(.+?)(?=\n\s*\n|\Z)", b, re.S | re.I)
             if m_names:
                 names = re.split(r"[;,]", re.sub(r"\s+", " ", m_names.group(1)))
                 emp_n = len([n for n in names if len(n.strip()) > 2]) or None
+                emp_cite = m_names.group(0)[:200]
         # contract type: map real wording to the enum
         low = b.lower()
+        ctype_m = re.search(r"lump sum|fixed fee|fixed price|time and materials?|time & materials?|"
+                            r"cost plus|not.{0,12}under.{0,4}contract", b, re.I)
         if re.search(r"lump sum|fixed fee|fixed price", low):   ctype = "Fixed Price"
         elif re.search(r"time and material|time & material", low): ctype = "Time & Material"
         elif "cost plus" in low:                                 ctype = "Cost Plus"
@@ -337,17 +394,34 @@ def _mock_llm(text: str) -> dict:
         # tax year: "Tax Year(s): 2025" / "Project Years: 2024" / "Period 2023-..."
         ty = re.search(r"(?:Tax Year|Project Years?|Project Period|Period)[^\d]{0,12}(20\d{2})", b, re.I)
         tax_year = ty.group(1) if ty else doc_year
+        description = grab("Project Description|Description", "Technical|Process|Alternatives")
+        alternatives = grab("Alternatives Considered", "Project|\\Z")
+        uncertainty = grab("Technical Uncertainty|Technical Challenges", "Process|Alternatives")
         projects.append({
             "project_title": title,
             "tax_year": tax_year,
             "contract_type": ctype,
-            "description": grab("Project Description|Description", "Technical|Process|Alternatives"),
+            "description": description,
             "total_man_hours": int(mh.group(1).replace(",", "")) if mh else None,
             "employees_completing_research": emp_n,
             "supplies_used": sup_m.group(1).strip() if sup_m else "",
-            "solutions_alternatives_considered": grab("Alternatives Considered", "Project|\\Z"),
-            "technical_challenges_uncertainties": grab("Technical Uncertainty|Technical Challenges", "Process|Alternatives"),
+            "solutions_alternatives_considered": alternatives,
+            "technical_challenges_uncertainties": uncertainty,
             "confidence": 0.62,  # mock is low-confidence by design
+            # Mock "proof of work": reuse the exact matched span as the citation
+            # quote wherever we have one, so the grounding step downstream has
+            # something real to locate on the page. None where we have nothing.
+            "citations": {
+                "project_title": title if title != "Untitled Project" else None,
+                "tax_year": (ty.group(0) if ty else None),
+                "contract_type": (ctype_m.group(0) if ctype_m else None),
+                "description": (description[:200] if description else None),
+                "total_man_hours": (mh.group(0) if mh else None),
+                "employees_completing_research": emp_cite,
+                "supplies_used": (sup_m.group(0) if sup_m else None),
+                "solutions_alternatives_considered": (alternatives[:200] if alternatives else None),
+                "technical_challenges_uncertainties": (uncertainty[:200] if uncertainty else None),
+            },
         })
     return {"projects": projects}
 

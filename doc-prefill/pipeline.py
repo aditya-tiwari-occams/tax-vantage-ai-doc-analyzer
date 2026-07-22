@@ -35,6 +35,7 @@ from segment import segment_batch, Section
 from prefill import (PROJECT_JSON_SCHEMA, SYSTEM_PROMPT, MODEL,
                      PROMPT_VERSION, SCHEMA_VERSION, _sha256_text,
                      _cache_get, _cache_put, _mock_llm)
+from citations import CITED_FIELDS, ground_citations, render_batch_markdown  # noqa: F401 (re-exported)
 
 MAX_CONCURRENCY = int(os.environ.get("PREFILL_CONCURRENCY", "5"))
 MAX_RETRIES = int(os.environ.get("PREFILL_MAX_RETRIES", "4"))
@@ -273,23 +274,43 @@ async def _openai_with_retry(text: str, tel: Telemetry) -> dict:
 # ----------------------------------------------------------------------
 # Map-reduce for an oversized single-project section
 # ----------------------------------------------------------------------
+def _merge_field(base: dict, other: dict, k: str, v) -> bool:
+    """Merge one field's value from `other` into `base` (longest non-empty
+    string wins; max for numeric fields; fill if base is empty). If `other`'s
+    value wins AND the field is a cited one, carry its citation along too —
+    otherwise a merge could keep a value but silently lose its proof-of-work
+    source. Returns True if `other`'s value won."""
+    cur = base.get(k)
+    won = False
+    if isinstance(v, str):
+        if len(v.strip()) > len(str(cur or "").strip()):
+            base[k] = v; won = True
+    elif isinstance(v, (int, float)) and v is not None:
+        newv = max(cur or 0, v)
+        if newv != cur:
+            base[k] = newv; won = True
+    elif cur in (None, ""):
+        base[k] = v; won = True
+    if won and k in CITED_FIELDS:
+        other_cite = (other.get("citations") or {}).get(k)
+        if other_cite is not None:
+            base.setdefault("citations", {})[k] = other_cite
+    return won
+
+
 def _reduce_partials(partials: List[dict]) -> dict:
     """Merge per-chunk extractions of the SAME project into one record:
-    longest non-empty string wins; max for numeric/confidence fields."""
+    longest non-empty string wins; max for numeric/confidence fields. Each
+    winning field's citation (proof-of-work quote) travels with it."""
     projects = [p for part in partials for p in part.get("projects", [])]
     if not projects:
         return {}
     merged = dict(projects[0])
     for p in projects[1:]:
         for k, v in p.items():
-            cur = merged.get(k)
-            if isinstance(v, str):
-                if len(v.strip()) > len(str(cur or "").strip()):
-                    merged[k] = v
-            elif isinstance(v, (int, float)) and v is not None:
-                merged[k] = max(cur or 0, v)
-            elif cur in (None, ""):
-                merged[k] = v
+            if k == "citations":
+                continue
+            _merge_field(merged, p, k, v)
     return merged
 
 
@@ -339,16 +360,12 @@ def merge_projects_by_title(projects: List[dict], threshold: float = 0.82) -> Li
 
 
 def _merge_into(base: dict, other: dict):
-    """Field-level merge: longest non-empty string, max number, max confidence."""
+    """Field-level merge: longest non-empty string, max number, max confidence.
+    Citations (proof-of-work quotes) travel with whichever value wins."""
     for k, v in other.items():
-        cur = base.get(k)
-        if isinstance(v, str):
-            if len(v.strip()) > len(str(cur or "").strip()):
-                base[k] = v
-        elif isinstance(v, (int, float)) and v is not None:
-            base[k] = max(cur or 0, v)
-        elif cur in (None, ""):
-            base[k] = v
+        if k == "citations":
+            continue
+        _merge_field(base, other, k, v)
 
 
 _SUBSTANCE = ["description", "technical_challenges_uncertainties",
@@ -742,6 +759,11 @@ async def _process_section(sec: Section, sem: asyncio.Semaphore,
         p["_source_file"] = sec.doc
         p["_source_pages"] = sec.pages
         p["_detection"] = sec.strategy
+        # Proof of work: ground each field's raw LLM quote against the exact
+        # text this section's LLM call(s) saw, while we still have it — this
+        # attaches {page, section, verified} per field. Must run before any
+        # not-found-marker rewriting below (which doesn't touch citations).
+        p["citations"] = ground_citations(p.get("citations"), sec.text, sec.doc)
         # Do NOT fall back to the internal title_hint placeholder — an empty
         # project_title means the LLM couldn't identify a project name, and
         # _is_real_project() will correctly drop this record downstream.

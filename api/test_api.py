@@ -72,6 +72,13 @@ def print_result(result: dict) -> None:
             print(f"     Desc: {desc[:140]}{'...' if len(desc) > 140 else ''}")
         if p.get("_review_reasons"):
             print(f"     Review reasons: {', '.join(p['_review_reasons'])}")
+        citations = p.get("citations") or {}
+        if citations:
+            cited = [f for f, c in citations.items() if c.get("quote")]
+            verified = [f for f in cited if citations[f].get("verified")]
+            print(f"     Proof of work: {len(verified)}/{len(cited)} citation(s) verified"
+                  + (f"  (unverified: {', '.join(f for f in cited if f not in verified)})"
+                     if len(verified) < len(cited) else ""))
         print()
 
     t = result.get("telemetry", {})
